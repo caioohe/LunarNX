@@ -55,6 +55,7 @@ public:
                                     const std::string& console_key = {});
 
     std::vector<PsnProfile> savedPsnProfiles() const;
+    bool persistPsnSession();
     bool selectPsnProfile(const std::string& account_id);
     bool activatePsnProfile(const PsnAuthManager& session);
     bool forgetPsnSession();
@@ -63,7 +64,7 @@ public:
     // PSN device list (requires valid token)
     bool fetchPsnDevices(HostListCallback cb);
     bool loadPsnDeviceCache();
-    void clearPsnDeviceCache();
+    void clearPsnDeviceCache(const std::string& account_id);
     const std::string& getPsnDeviceError() const { return psn_device_error_; }
 
     // Credentials
@@ -88,6 +89,7 @@ private:
     std::string psn_device_error_;
     ChiakiLog chiaki_log_;
     PsCredentials credentials_;
+    std::mutex psn_session_file_mutex_;
     PsnAuthManager psn_auth_;
     std::unique_ptr<PsConsoleRepository> repository_;
     common::OperationGeneration psn_device_generation_;

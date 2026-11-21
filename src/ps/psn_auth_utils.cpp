@@ -94,6 +94,18 @@ bool base64Decode(const std::string& input, std::string& output) {
     return !output.empty();
 }
 
+std::string psnAccountFileKey(const std::string& account_id) {
+    std::string bytes;
+    if (!base64Decode(account_id, bytes) || bytes.size() != 8) return {};
+    constexpr char hex[] = "0123456789abcdef";
+    std::string key;
+    for (unsigned char byte : bytes) {
+        key += hex[byte >> 4];
+        key += hex[byte & 15];
+    }
+    return key;
+}
+
 std::string extractPsnAuthorizationCode(const std::string& input) {
     std::string value = trim(input);
     if (value.empty()) return {};

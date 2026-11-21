@@ -30,7 +30,7 @@ def main():
                 "FILE* file", 1)[0],
             "signing in alone must not synthesize a phantom Main PS4")
     require('cJSON_GetObjectItemCaseSensitive(root, "account_id")' in repository and
-            "account_id != account->valuestring" in repository,
+            "account_id == account->valuestring" in repository,
             "PS cache must be scoped to the signed-in PSN account")
     require('cJSON_AddStringToObject(root, "account_id"' in repository and
             'cJSON_AddItemToObject(root, "consoles"' in repository,
@@ -46,7 +46,7 @@ def main():
             "a successful live PSN lookup must replace the cache")
     require("loadPsnDeviceCache()" in ui and "psn_cache_loaded" in ui,
             "PS UI must restore and display cached remote consoles without a lookup click")
-    require("forgetPsnSession()" in ui and "clearPsnDeviceCache()" in manager.split(
+    require("forgetPsnSession()" in ui and "clearPsnDeviceCache(account_id)" in manager.split(
                 "bool PsManager::forgetPsnSession", 1)[1].split(
                 "bool PsManager::loadPsnDeviceCache", 1)[0],
             "sign-out and expired sessions must clear account-scoped PS cache data")

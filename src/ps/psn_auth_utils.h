@@ -7,6 +7,7 @@
 namespace lunar::ps {
 
 std::string base64Encode(const uint8_t* data, size_t size);
+std::string psnAccountFileKey(const std::string& account_id);
 bool base64Decode(const std::string& input, std::string& output);
 
 // Accepts either Sony's full redirect URL or a raw authorization code.

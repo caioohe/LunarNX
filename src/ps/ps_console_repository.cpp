@@ -2,6 +2,7 @@
 
 #include "ps_console_repository.h"
 #include "ps_discovery.h"
+#include "psn_auth_utils.h"
 #include "../api/http_client.h"
 #include "../common.h"
 #include "../diagnostics.h"
@@ -12,6 +13,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <cstdio>
+#include <sys/stat.h>
 
 namespace lunar::ps {
 namespace {
@@ -26,6 +28,40 @@ PsConsole makeMainPs4RemoteConsole() {
     return console;
 }
 
+std::string accountCachePath(const std::string& account_id) {
+    const auto key = psnAccountFileKey(account_id);
+    if (key.empty()) return {};
+    const std::string legacy = lunar::get_ps_console_cache_path();
+    return legacy.substr(0, legacy.rfind('.') + 1) + key + ".json";
+}
+
+using CacheJson = std::unique_ptr<cJSON, decltype(&cJSON_Delete)>;
+
+cJSON* readCacheFile(const std::string& path) {
+    constexpr long kMaxCacheBytes = 1024 * 1024;
+    FILE* file = std::fopen(path.c_str(), "rb");
+    if (!file) return nullptr;
+    if (std::fseek(file, 0, SEEK_END) != 0) { std::fclose(file); return nullptr; }
+    const long length = std::ftell(file);
+    if (length <= 0 || length > kMaxCacheBytes) { std::fclose(file); return nullptr; }
+    std::rewind(file);
+    std::string content(static_cast<size_t>(length), '\0');
+    const bool read_ok = std::fread(content.data(), 1, content.size(), file) == content.size();
+    std::fclose(file);
+    if (!read_ok) return nullptr;
+
+    return cJSON_Parse(content.c_str());
+}
+
+CacheJson readCache(const std::string& path) {
+    return CacheJson(readCacheFile(path), cJSON_Delete);
+}
+
+bool cacheBelongsTo(const cJSON* root, const std::string& account_id) {
+    const auto* account = root ? cJSON_GetObjectItemCaseSensitive(root, "account_id") : nullptr;
+    return cJSON_IsString(account) && account_id == account->valuestring;
+}
+
 } // namespace
 
 PsConsoleRepository::PsConsoleRepository(ChiakiLog* log) : log_(log) {}
@@ -35,7 +71,6 @@ PsConsoleRepository::~PsConsoleRepository() {
 }
 
 bool PsConsoleRepository::loadPsnCache(const std::string& account_id) {
-    constexpr long kMaxCacheBytes = 1024 * 1024;
     std::lock_guard<std::mutex> file_lock(file_mutex_);
     bool expose_main_ps4 = false;
     {
@@ -52,25 +87,18 @@ bool PsConsoleRepository::loadPsnCache(const std::string& account_id) {
         }
     }
     if (account_id.empty()) return false;
-    FILE* file = std::fopen(lunar::get_ps_console_cache_path(), "rb");
-    if (!file) return false;
-    if (std::fseek(file, 0, SEEK_END) != 0) { std::fclose(file); return false; }
-    const long length = std::ftell(file);
-    if (length <= 0 || length > kMaxCacheBytes) { std::fclose(file); return false; }
-    std::rewind(file);
-    std::string content(static_cast<size_t>(length), '\0');
-    const bool read_ok = std::fread(content.data(), 1, content.size(), file) == content.size();
-    std::fclose(file);
-    if (!read_ok) return false;
-
-    cJSON* root = cJSON_Parse(content.c_str());
-    cJSON* account = root ? cJSON_GetObjectItemCaseSensitive(root, "account_id") : nullptr;
-    cJSON* consoles = root ? cJSON_GetObjectItemCaseSensitive(root, "consoles") : nullptr;
-    if (!root || !cJSON_IsString(account) || account_id != account->valuestring ||
-        !cJSON_IsArray(consoles)) {
-        if (root) cJSON_Delete(root);
-        return false;
+    const auto path = accountCachePath(account_id);
+    if (path.empty()) return false;
+    auto root = readCache(path);
+    if (!root) root = readCache(path + ".bak");
+    if (!root) {
+        const std::string legacy = lunar::get_ps_console_cache_path();
+        root = readCache(legacy);
+        if (!root) root = readCache(legacy + ".bak");
     }
+    if (!cacheBelongsTo(root.get(), account_id)) return false;
+    auto* consoles = cJSON_GetObjectItemCaseSensitive(root.get(), "consoles");
+    if (!cJSON_IsArray(consoles)) return false;
 
     std::vector<PsConsole> cached;
     cJSON* item = nullptr;
@@ -90,7 +118,6 @@ bool PsConsoleRepository::loadPsnCache(const std::string& account_id) {
             console.nickname, cJSON_IsTrue(enabled) != 0};
         cached.push_back(std::move(console));
     }
-    cJSON_Delete(root);
     if (expose_main_ps4) cached.push_back(makeMainPs4RemoteConsole());
     const size_t cached_count = cached.size();
     {
@@ -104,7 +131,8 @@ bool PsConsoleRepository::loadPsnCache(const std::string& account_id) {
 
 bool PsConsoleRepository::savePsnCache(const std::string& account_id,
                                        CancelCallback cancel) const {
-    if (account_id.empty()) return false;
+    const auto path = accountCachePath(account_id);
+    if (path.empty()) return false;
     std::lock_guard<std::mutex> file_lock(file_mutex_);
     if (cancel && cancel()) return false;
     std::vector<PsConsole> consoles;
@@ -112,10 +140,6 @@ bool PsConsoleRepository::savePsnCache(const std::string& account_id,
         std::lock_guard<std::mutex> lock(mutex_);
         if (cancel && cancel()) return false;
         consoles = psn_consoles_;
-    }
-    if (consoles.empty()) {
-        std::remove(lunar::get_ps_console_cache_path());
-        return true;
     }
     cJSON* root = cJSON_CreateObject();
     cJSON_AddStringToObject(root, "account_id", account_id.c_str());
@@ -134,7 +158,6 @@ bool PsConsoleRepository::savePsnCache(const std::string& account_id,
     char* json = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
     if (!json) return false;
-    const std::string path = lunar::get_ps_console_cache_path();
     const std::string temp_path = path + ".tmp";
     FILE* file = std::fopen(temp_path.c_str(), "wb");
     if (!file) { std::free(json); return false; }
@@ -144,10 +167,12 @@ bool PsConsoleRepository::savePsnCache(const std::string& account_id,
     std::free(json);
     if (!ok) { std::remove(temp_path.c_str()); return false; }
     const std::string backup_path = path + ".bak";
-    std::remove(backup_path.c_str());
-    errno = 0;
-    const bool had_existing = std::rename(path.c_str(), backup_path.c_str()) == 0;
-    if (!had_existing && errno != ENOENT) {
+    struct stat primary{};
+    const bool had_existing = ::stat(path.c_str(), &primary) == 0;
+    if ((!had_existing && errno != ENOENT) ||
+        (had_existing &&
+         ((std::remove(backup_path.c_str()) != 0 && errno != ENOENT) ||
+          std::rename(path.c_str(), backup_path.c_str()) != 0))) {
         std::remove(temp_path.c_str());
         return false;
     }
@@ -156,20 +181,32 @@ bool PsConsoleRepository::savePsnCache(const std::string& account_id,
         std::remove(temp_path.c_str());
         return false;
     }
-    if (had_existing) std::remove(backup_path.c_str());
+    std::remove(backup_path.c_str());
     diagnosticLog("ps-console-repository", "Saved PSN device cache count=%zu", consoles.size());
     return true;
 }
 
-void PsConsoleRepository::clearPsnCache() {
+void PsConsoleRepository::clearPsnCache(const std::string& account_id) {
     std::lock_guard<std::mutex> file_lock(file_mutex_);
     {
         std::lock_guard<std::mutex> lock(mutex_);
         psn_consoles_.clear();
     }
-    std::remove(lunar::get_ps_console_cache_path());
-    std::remove((std::string(lunar::get_ps_console_cache_path()) + ".tmp").c_str());
-    std::remove((std::string(lunar::get_ps_console_cache_path()) + ".bak").c_str());
+    const auto path = accountCachePath(account_id);
+    if (path.empty()) return;
+    for (const auto* suffix : {"", ".tmp", ".bak"}) {
+        std::remove((path + suffix).c_str());
+    }
+
+    // Old installations can still have one unscoped cache. Only remove it
+    // if the embedded identity is the account that signed out.
+    const std::string legacy = lunar::get_ps_console_cache_path();
+    for (const auto* suffix : {"", ".tmp", ".bak"}) {
+        const auto file = legacy + suffix;
+        if (cacheBelongsTo(readCache(file).get(), account_id)) {
+            std::remove(file.c_str());
+        }
+    }
 }
 
 bool PsConsoleRepository::startDiscovery(HostListCallback cb) {

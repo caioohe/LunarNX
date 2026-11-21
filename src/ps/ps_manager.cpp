@@ -14,6 +14,7 @@
 #include <cstdio>
 #include <dirent.h>
 #include <tuple>
+#include <sys/stat.h>
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
@@ -30,15 +31,18 @@ std::string profileDirectory() {
 }
 
 std::string profileFilename(const std::string& account_id) {
-    std::string bytes;
-    if (!base64Decode(account_id, bytes) || bytes.size() != 8) return {};
-    constexpr char hex[] = "0123456789abcdef";
-    std::string name = kProfilePrefix;
-    for (unsigned char byte : bytes) {
-        name += hex[byte >> 4];
-        name += hex[byte & 15];
-    }
-    return name + ".json";
+    const auto key = psnAccountFileKey(account_id);
+    return key.empty() ? std::string{} : kProfilePrefix + key + ".json";
+}
+
+// Rehydrate an interrupted replacement before saveToken opens its staging
+// files, so the only recoverable copy is handled as the current primary.
+bool restoreSessionBackup(const std::string& path) {
+    struct stat primary{};
+    if (::stat(path.c_str(), &primary) == 0) return true;
+    if (errno != ENOENT) return false;
+    const auto backup = path + ".bak";
+    return std::rename(backup.c_str(), path.c_str()) == 0 || errno == ENOENT;
 }
 
 bool removeIfPresent(const std::string& path) {
@@ -98,7 +102,7 @@ bool PsManager::fetchPsnDevices(HostListCallback cb) {
         psn_device_error_ = "PSN account ID is unavailable";
         return false;
     }
-    if (token_refreshed && !psn_auth_.saveToken(get_psn_token_path())) {
+    if (token_refreshed && !persistPsnSession()) {
         if (cancelled()) return true;
         psn_device_error_ = "PSN session refreshed but could not be saved";
         return false;
@@ -115,7 +119,7 @@ bool PsManager::fetchPsnDevices(HostListCallback cb) {
     if (!ok && repository_->getLastPsnStatusCode() == 401) {
         diagnosticLog("ps-manager", "PSN device token rejected; refreshing and retrying");
         if (psn_auth_.refreshToken({}, cancelled)) {
-            if (!psn_auth_.saveToken(get_psn_token_path())) {
+            if (!persistPsnSession()) {
                 if (cancelled()) return true;
                 error = "PSN session refreshed but could not be saved";
             } else {
@@ -188,26 +192,38 @@ bool PsManager::selectPsnProfile(const std::string& account_id) {
         session.getAccountId() == account_id && activatePsnProfile(session);
 }
 
+bool PsManager::persistPsnSession() {
+    std::lock_guard<std::mutex> lock(psn_session_file_mutex_);
+    const auto* path = get_psn_token_path();
+    return restoreSessionBackup(path) && psn_auth_.saveToken(path);
+}
+
 bool PsManager::activatePsnProfile(const PsnAuthManager& session) {
+    std::lock_guard<std::mutex> lock(psn_session_file_mutex_);
     const auto next_id = session.getAccountId();
     if (profileFilename(next_id).empty()) return false;
     const auto previous_id = getPsnAccountId();
     if (hasStoredPsnSession() && previous_id != next_id) {
         const auto name = profileFilename(previous_id);
-        if (name.empty() || !psn_auth_.saveToken(profileDirectory() + name)) return false;
+        if (name.empty()) return false;
+        const auto archive = profileDirectory() + name;
+        if (!restoreSessionBackup(archive) || !psn_auth_.saveToken(archive)) return false;
     }
-    if (!psn_auth_.replaceSession(session, get_psn_token_path())) return false;
+    const auto* path = get_psn_token_path();
+    if (!restoreSessionBackup(path) || !psn_auth_.replaceSession(session, path)) return false;
     psn_profile_generation_.invalidate();
     loadPsnDeviceCache();
     return true;
 }
 
 bool PsManager::forgetPsnSession() {
-    const auto name = profileFilename(getPsnAccountId());
+    std::lock_guard<std::mutex> lock(psn_session_file_mutex_);
+    const auto account_id = getPsnAccountId();
+    const auto name = profileFilename(account_id);
     if (!name.empty() && !removeSessionFiles(profileDirectory() + name)) return false;
     if (!removeSessionFiles(get_psn_token_path())) return false;
     psn_auth_.signOut();
-    clearPsnDeviceCache();
+    clearPsnDeviceCache(account_id);
     return true;
 }
 
@@ -218,9 +234,9 @@ bool PsManager::loadPsnDeviceCache() {
     return repository_->loadPsnCache(account_id);
 }
 
-void PsManager::clearPsnDeviceCache() {
+void PsManager::clearPsnDeviceCache(const std::string& account_id) {
     psn_device_generation_.invalidate();
-    repository_->clearPsnCache();
+    repository_->clearPsnCache(account_id);
 }
 
 bool PsManager::loadCredentials() {

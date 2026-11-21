@@ -320,8 +320,7 @@ public:
                                     manager->forgetPsnSession();
                                 }
                             } else if (token_refreshed &&
-                                       !manager->psnAuth().saveToken(
-                                           lunar::get_psn_token_path())) {
+                                       !manager->persistPsnSession()) {
                                 ok = false;
                                 error =
                                     "PSN session refreshed but could not be saved";
@@ -356,8 +355,7 @@ public:
                                             }
                                             return false;
                                         }
-                                        if (!manager->psnAuth().saveToken(
-                                                lunar::get_psn_token_path())) {
+                                        if (!manager->persistPsnSession()) {
                                             refresh_error =
                                                 "PSN session refreshed but could not be saved";
                                             return false;
@@ -809,7 +807,7 @@ void PsActivity::onResume() {
                 const bool refreshed = manager->psnAuth().refreshIdentity(
                     [alive]() { return !alive->load(); });
                 if (refreshed) {
-                    manager->psnAuth().saveToken(lunar::get_psn_token_path());
+                    manager->persistPsnSession();
                 }
                 identity_fetching->store(false);
                 brls::sync([this, manager, alive]() {

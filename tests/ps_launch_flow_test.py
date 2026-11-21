@@ -66,7 +66,7 @@ def main():
     require("ensureValidToken(" in connect_worker and
             "context->cancel_requested.load()" in connect_worker and
             "token_refreshed &&" in connect_worker and
-            "manager->psnAuth().saveToken(" in connect_worker and
+            "manager->persistPsnSession(" in connect_worker and
             "controller->setPsnCredentials(" in connect_worker and
             "controller->startStream()" in connect_worker,
             "remote loading must validate and persist PSN credentials before streaming")

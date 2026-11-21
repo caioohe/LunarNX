@@ -551,7 +551,9 @@ struct Deko3DRenderContext {
 #if LUNARNX_LSFG
   std::unique_ptr<NativeLsfg> lsfg;
   int lsfg_texture_slot = -1;
-  const dk::Image* lsfg_pending_original = nullptr;
+  const dk::Image* lsfg_last_original = nullptr;
+  bool lsfg_show_original_next = false;
+  bool lsfg_capture_pending = false;
   uint64_t lsfg_last_capture_ns = 0;
   bool lsfg_failed = false;
 #endif
@@ -762,7 +764,9 @@ void releaseRetainedFrames(Deko3DRenderContext& s) {
 void clearPendingFrames(Deko3DRenderContext& s) {
 #if LUNARNX_LSFG
   if (s.lsfg) s.lsfg->reset();
-  s.lsfg_pending_original = nullptr;
+  s.lsfg_last_original = nullptr;
+  s.lsfg_show_original_next = false;
+  s.lsfg_capture_pending = false;
   s.lsfg_last_capture_ns = 0;
 #endif
   for(size_t i=0;i<s.pending_frames.size();++i){
@@ -1173,15 +1177,22 @@ bool recordLsfgFrame(Deko3DRenderContext& s, dk::Image* fb, dk::Image* db,
   if (s.frame_w != 1280 || s.frame_h != 720 ||
       s.target_w * 9 != s.target_h * 16) {
     s.lsfg->reset();
-    s.lsfg_pending_original = nullptr;
+    s.lsfg_last_original = nullptr;
+    s.lsfg_show_original_next = false;
+    s.lsfg_capture_pending = false;
     s.lsfg_last_capture_ns = 0;
     return false;
   }
 
-  const dk::Image* output = s.lsfg_pending_original;
-  s.lsfg_pending_original = nullptr;
-  if (!output) {
-    if (!new_frame) return false;
+  // Keep displaying the last history frame when a display tick has no
+  // capture. The current decoded frame may have arrived on the previous
+  // original-output tick without ever being submitted to LSFG.
+  const dk::Image* output = s.lsfg_last_original;
+  s.lsfg_capture_pending |= new_frame;
+  const bool capture = s.lsfg_capture_pending && !s.lsfg_show_original_next;
+  s.lsfg_show_original_next = false;
+  if (capture) {
+    s.lsfg_capture_pending = false;
     const auto now = rendererMonotonicNowNs();
     if (s.lsfg_last_capture_ns && now - s.lsfg_last_capture_ns > 90000000ULL)
       s.lsfg->reset();
@@ -1201,14 +1212,18 @@ bool recordLsfgFrame(Deko3DRenderContext& s, dk::Image* fb, dk::Image* db,
       return false;
     }
     output = generated ? generated : original;
-    s.lsfg_pending_original = original;
+    s.lsfg_last_original = original;
+    s.lsfg_show_original_next = true;
   }
 
+  if (!output) return false;
   dk::ImageDescriptor descriptor;
   descriptor.initialize(dk::ImageView{*output});
   if (!s.vctx->updateImageDescriptor(s.present_cb, s.lsfg_texture_slot, descriptor)) {
     s.lsfg_failed = true;
-    s.lsfg_pending_original = nullptr;
+    s.lsfg_last_original = nullptr;
+    s.lsfg_show_original_next = false;
+    s.lsfg_capture_pending = false;
     return false;
   }
   s.vctx->invalidateImageDescriptors(s.present_cb);
@@ -1665,6 +1680,17 @@ bool VideoRenderer::initialize(const char*,int w,int h){
   s->progress_stage=progress_stage_sink_;
   s->progress_stage_started_ns=progress_stage_started_ns_sink_;
 
+#if LUNARNX_LSFG
+  std::unique_ptr<NativeLsfg> prepared_lsfg;
+  std::string lsfg_error;
+  if (lsfg_30fps_ && w == 1280 && h == 720) {
+    const char* folder = "sdmc:/switch/LunarNX/lsfg";
+    const char* dll = "sdmc:/switch/LunarNX/lsfg/Lossless.dll";
+    prepared_lsfg = NativeLsfg::prepare(true, 4, dll, folder, lsfg_error);
+    if (!prepared_lsfg) lunar::persistentEventLog("lsfg", "%s", lsfg_error.c_str());
+  }
+#endif
+
   std::unique_lock<std::recursive_mutex> gpu_lock;
   try {
     lunar::diagnosticLog("render","initialize begin width=%d height=%d",w,h);
@@ -1759,14 +1785,18 @@ bool VideoRenderer::initialize(const char*,int w,int h){
       ? static_cast<int>(brls::Application::windowHeight)
       : static_cast<int>(brls::Application::ORIGINAL_WINDOW_HEIGHT);
 #if LUNARNX_LSFG
-  if (lsfg_30fps_ && w == 1280 && h == 720 && s->blit_fs) {
+  if (prepared_lsfg && s->blit_fs) {
     s->lsfg_texture_slot = s->vctx->allocateImageIndex();
     if (s->lsfg_texture_slot >= 0) {
-      const char* folder = "sdmc:/switch/LunarNX/lsfg";
-      const char* dll = "sdmc:/switch/LunarNX/lsfg/Lossless.dll";
-      std::string error;
-      s->lsfg = NativeLsfg::create(s->dev, 1280, 720, true, 4, dll, folder, error);
-      lunar::persistentEventLog("lsfg", "%s", s->lsfg ? "720p session prepared" : error.c_str());
+      if (prepared_lsfg->initializeGpu(s->dev, 1280, 720, lsfg_error)) {
+        s->lsfg = std::move(prepared_lsfg);
+        lunar::persistentEventLog("lsfg", "720p session prepared");
+      } else {
+        prepared_lsfg.reset();
+        s->vctx->freeImageIndex(s->lsfg_texture_slot);
+        s->lsfg_texture_slot = -1;
+        lunar::persistentEventLog("lsfg", "%s", lsfg_error.c_str());
+      }
     }
   }
 #endif
@@ -2346,7 +2376,9 @@ void VideoRenderer::shutdown(){
   destroyPostProcessTargets(*s);
 #if LUNARNX_LSFG
   s->lsfg.reset();
-  s->lsfg_pending_original = nullptr;
+  s->lsfg_last_original = nullptr;
+  s->lsfg_show_original_next = false;
+  s->lsfg_capture_pending = false;
   s->lsfg_last_capture_ns = 0;
   s->lsfg_failed = false;
   if (s->vctx && s->lsfg_texture_slot >= 0)

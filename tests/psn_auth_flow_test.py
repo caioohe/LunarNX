@@ -66,7 +66,7 @@ def main():
             "a PSN 401 must force token refresh before one device-list retry")
     require("setPsnRefreshCallback" in ps_ui and
             "manager->psnAuth().refreshToken(" in ps_ui and
-            "manager->psnAuth().saveToken(" in ps_ui,
+            "manager->persistPsnSession(" in ps_ui,
             "a remote-session HTTP rejection must refresh and persist the token once")
     require("using CancelCallback" in auth_header and
             "CancelCallback cancel" in auth and
@@ -78,9 +78,9 @@ def main():
     require("const std::function<bool()>& cancel" in refresh_callback and
             "refreshToken(" in refresh_callback and "{}, cancel" in refresh_callback,
             "remote-session token refresh must be interrupted by loading-page cancellation")
-    require("token_refreshed && !psn_auth_.saveToken(get_psn_token_path())" in manager,
+    require("token_refreshed && !persistPsnSession()" in manager,
             "rotated PSN tokens must be persisted after a successful lookup")
-    first_token_save = manager.index("psn_auth_.saveToken(get_psn_token_path())")
+    first_token_save = manager.index("persistPsnSession()")
     first_device_fetch = manager.index("repository_->fetchPsnDevices")
     require(first_token_save < first_device_fetch,
             "a refreshed PSN token must be persisted before device lookup")
@@ -120,7 +120,7 @@ def main():
     confirm_sign_out = ps_ui.split("void PsActivity::confirmSignOut", 1)[1].split(
         "void PsActivity::signInToPsn", 1)[0]
     require("forgetPsnSession()" in confirm_sign_out and
-            "clearPsnDeviceCache()" in manager.split("bool PsManager::forgetPsnSession", 1)[1]
+            "clearPsnDeviceCache(account_id)" in manager.split("bool PsManager::forgetPsnSession", 1)[1]
                 .split("bool PsManager::loadPsnDeviceCache", 1)[0],
             "explicit and expired-session sign-out must clear PSN device identity")
     device_worker_failure = ps_ui.split('startNetworkWorker("psn-device-list"', 1)[1]

@@ -227,18 +227,32 @@ struct NativeLsfg::State {
 
 NativeLsfg::NativeLsfg(std::unique_ptr<State> state) : state_(std::move(state)) {}
 NativeLsfg::~NativeLsfg() = default;
-std::unique_ptr<NativeLsfg> NativeLsfg::create(DkDevice device,
-    unsigned width, unsigned height, bool performance, unsigned denominator,
+std::unique_ptr<NativeLsfg> NativeLsfg::prepare(bool performance, unsigned denominator,
     const char *dll, const char *root, std::string &error) {
   try {
-    auto s = std::make_unique<State>(); s->device = device;
+    auto s = std::make_unique<State>();
     s->config.performance = performance;
     s->config.generated_frames = 1;
     s->config.flow_denominator = denominator == 2 ? 2 : 4;
-    if (!s->prepare(dll, root, error) || !s->load_shaders(error) || !s->allocate_images(width, height, error)) return {};
+    if (!s->prepare(dll, root, error)) return {};
     return std::unique_ptr<NativeLsfg>(new NativeLsfg(std::move(s)));
-  } catch (const std::exception &e) { error = std::string("LSFG Deko3D: ") + e.what(); return {}; }
+  } catch (const std::exception &e) {
+    error = std::string("LSFG Deko3D: ") + e.what();
+    return {};
+  }
 }
+
+bool NativeLsfg::initializeGpu(DkDevice device, unsigned width, unsigned height,
+    std::string &error) {
+  try {
+    state_->device = device;
+    return state_->load_shaders(error) && state_->allocate_images(width, height, error);
+  } catch (const std::exception &e) {
+    error = std::string("LSFG Deko3D: ") + e.what();
+    return false;
+  }
+}
+
 const dk::Image *NativeLsfg::input() const {
   return &state_->images[state_->phase % graph::history_image_count];
 }

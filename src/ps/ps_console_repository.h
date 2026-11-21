@@ -40,7 +40,7 @@ public:
     bool loadPsnCache(const std::string& account_id);
     bool savePsnCache(const std::string& account_id,
                       CancelCallback cancel = {}) const;
-    void clearPsnCache();
+    void clearPsnCache(const std::string& account_id);
     int getLastPsnStatusCode() const { return last_psn_status_code_; }
 
     // Get current unified console list

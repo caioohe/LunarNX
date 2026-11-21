@@ -9,9 +9,9 @@
  * record() never compiles, allocates, waits or submits commands. */
 class NativeLsfg {
 public:
-  static std::unique_ptr<NativeLsfg> create(DkDevice device,
-      unsigned width, unsigned height, bool performance, unsigned flow_denominator,
+  static std::unique_ptr<NativeLsfg> prepare(bool performance, unsigned flow_denominator,
       const char *dll_path, const char *cache_root, std::string &error);
+  bool initializeGpu(DkDevice device, unsigned width, unsigned height, std::string &error);
   ~NativeLsfg();
   const dk::Image *input() const;
   bool record(DkCmdBuf cmd, const dk::Image *&generated,
