@@ -67,6 +67,7 @@ public:
     bool startStream();
     void requestCancel();
     void setRumbleEnabled(bool enabled);
+    void setLsfg30fps(bool enabled) { lsfg_30fps_ = enabled; }
     void setRumbleStrengthPercent(int percent);
     bool setPsnCredentials(std::string access_token, std::string account_id);
     std::string lastError() const;
@@ -96,6 +97,7 @@ private:
     std::string psn_account_id_;
     int width_, height_, fps_, bitrate_kbps_;
     stream::VideoCodec video_codec_;
+    bool lsfg_30fps_ = false;
     stream::VideoBackend video_backend_;
 
     // Components

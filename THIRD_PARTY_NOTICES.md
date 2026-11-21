@@ -73,3 +73,11 @@ and the Xbox Sphere mark are trademarks of Microsoft. PlayStation and the
 PlayStation family mark are trademarks of Sony Interactive Entertainment.
 Their appearance identifies supported platforms and does not imply endorsement
 of LunarNX by either trademark owner.
+
+## Optional native LSFG
+
+The native LSFG bridge is adapted from NaGaa95's DraSticDS_nx, with original
+copyright notices preserved in `src/stream/lsfg/`. The build fetches a pinned
+DraSticDS_nx revision for the GPL-3.0-or-later LSFG library and its compiler
+integration. The fetched sources retain their own license files and notices.
+The adapter uses the user's separately supplied Lossless Scaling DLL at runtime.

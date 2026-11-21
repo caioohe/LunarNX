@@ -12,6 +12,7 @@ struct PsSettingsSnapshot {
     int height = 720;
     int bitrate_kbps = 10000;
     stream::VideoCodec video_codec = stream::VideoCodec::H264;
+    bool lsfg_30fps = false;
     bool vibration_enabled = true;
     int rumble_strength_percent = 50;
 };

@@ -59,6 +59,7 @@ PsSettingsSnapshot loadPsSettings() {
         std::strcmp(codec->valuestring, "hevc") == 0) {
         out.video_codec = stream::VideoCodec::HEVC;
     }
+    out.lsfg_30fps = cJSON_IsTrue(cJSON_GetObjectItem(root, "ps_lsfg_30fps"));
     const cJSON* vibration = cJSON_GetObjectItem(root, "ps_vibration_enabled");
     if (cJSON_IsBool(vibration)) out.vibration_enabled = cJSON_IsTrue(vibration);
     const cJSON* rumble = cJSON_GetObjectItem(root, "ps_rumble_strength_percent");
@@ -78,6 +79,8 @@ bool savePsSettings(const PsSettingsSnapshot& settings) {
     cJSON_DeleteItemFromObject(root, "ps_video_codec");
     cJSON_AddStringToObject(root, "ps_video_codec",
                             stream::videoCodecName(settings.video_codec));
+    cJSON_DeleteItemFromObject(root, "ps_lsfg_30fps");
+    cJSON_AddBoolToObject(root, "ps_lsfg_30fps", settings.lsfg_30fps);
     cJSON_DeleteItemFromObject(root, "ps_vibration_enabled");
     cJSON_AddBoolToObject(root, "ps_vibration_enabled", settings.vibration_enabled);
     cJSON_DeleteItemFromObject(root, "ps_rumble_strength_percent");
@@ -118,6 +121,13 @@ brls::View* PsSettingsActivity::createContentView() {
                 ? stream::VideoCodec::HEVC : stream::VideoCodec::H264;
         });
     card->addView(codec);
+#if LUNARNX_LSFG
+    auto* lsfg = new brls::BooleanCell();
+    lsfg->init(brls::getStr("lunarnx/ps/settings_lsfg"), settings_.lsfg_30fps,
+        [this](bool enabled) { settings_.lsfg_30fps = enabled; });
+    card->addView(lsfg);
+    card->addView(makeMutedLabel(brls::getStr("lunarnx/ps/settings_lsfg_hint"), 13));
+#endif
     root->addView(card);
     root->addView(makeSectionHeader(
         brls::getStr("lunarnx/ps/settings_controller_section"),

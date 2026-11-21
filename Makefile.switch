@@ -199,6 +199,17 @@ C_SRCS = lib/cJSON.c \
     $(LIBPEER)/src/ssl_transport.c $(LIBPEER)/src/utils.c \
     lib/stubs/dav1d_stubs.c
 
+LSFG ?= 0
+ifeq ($(LSFG),1)
+DFLAGS += -DLUNARNX_LSFG=1
+INCDIRS += -Igithub_repos/drastic-lsfg/third_party/lsfg-deko3d/include \
+    -Ibuild/lsfg-switch/lsfg/include
+CXX_SRCS += src/stream/lsfg/native_lsfg.cpp
+LIBS += -Wl,--start-group build/lsfg-switch/lsfg/liblsfg.a \
+    build/lsfg-switch/lsfg/liblsfg_spirv_cross.a \
+    build/lsfg-switch/uam-generated/uam_isolated.o -ldeko3d -lnx -Wl,--end-group
+endif
+
 CXX_OBJS = $(CXX_SRCS:%.cpp=$(BUILD)/%.o)
 C_OBJS   = $(C_SRCS:%.c=$(BUILD)/%.o)
 ALL_OBJS = $(CXX_OBJS) $(C_OBJS)

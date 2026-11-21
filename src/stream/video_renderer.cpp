@@ -1,3 +1,6 @@
+#if defined(__SWITCH__) && LUNARNX_LSFG
+#include "lsfg/native_lsfg.h"
+#endif
 #include "video_renderer.h"
 #include "../diagnostics.h"
 #include "perf_stats.h"
@@ -545,6 +548,13 @@ struct Deko3DRenderContext {
   std::optional<BoundedCmdMemRing<brls::FRAMEBUFFERS_COUNT>> update_ring;
   std::optional<BoundedCmdMemRing<brls::FRAMEBUFFERS_COUNT>> present_ring;
   RenderTarget source_target;
+#if LUNARNX_LSFG
+  std::unique_ptr<NativeLsfg> lsfg;
+  int lsfg_texture_slot = -1;
+  const dk::Image* lsfg_pending_original = nullptr;
+  uint64_t lsfg_last_capture_ns = 0;
+  bool lsfg_failed = false;
+#endif
   RenderTarget upscale_target;
   RenderTarget rcas_target;
   int frame_w=1280, frame_h=720;
@@ -750,6 +760,11 @@ void releaseRetainedFrames(Deko3DRenderContext& s) {
 }
 
 void clearPendingFrames(Deko3DRenderContext& s) {
+#if LUNARNX_LSFG
+  if (s.lsfg) s.lsfg->reset();
+  s.lsfg_pending_original = nullptr;
+  s.lsfg_last_capture_ns = 0;
+#endif
   for(size_t i=0;i<s.pending_frames.size();++i){
     auto*& frame=s.pending_frames[i];
     if(frame)av_frame_free(&frame);
@@ -1053,11 +1068,12 @@ void recordFramebufferState(Deko3DRenderContext& s, dk::Image* fb, dk::Image* db
   s.present_cb.bindVtxBufferState(kVertexBufferState);
 }
 
-void recordRenderTargetState(Deko3DRenderContext& s, RenderTarget& target) {
-  dk::ImageView colorTarget{target.image};
+void recordRenderTargetState(Deko3DRenderContext& s, const dk::Image& image,
+                             int width, int height) {
+  dk::ImageView colorTarget{image};
   s.present_cb.bindRenderTargets(&colorTarget);
-  s.present_cb.setViewports(0,{{{0.0f,0.0f,static_cast<float>(target.width),static_cast<float>(target.height),0.0f,1.0f}}});
-  s.present_cb.setScissors(0,{{{0,0,static_cast<uint32_t>(target.width),static_cast<uint32_t>(target.height)}}});
+  s.present_cb.setViewports(0,{{{0.0f,0.0f,static_cast<float>(width),static_cast<float>(height),0.0f,1.0f}}});
+  s.present_cb.setScissors(0,{{{0,0,static_cast<uint32_t>(width),static_cast<uint32_t>(height)}}});
 
   dk::RasterizerState rasterizerState;
   dk::DepthStencilState depthStencilState;
@@ -1071,6 +1087,10 @@ void recordRenderTargetState(Deko3DRenderContext& s, RenderTarget& target) {
   s.present_cb.bindVtxBuffer(0,s.vertex_buf.getGpuAddr(),s.vertex_buf.getSize());
   s.present_cb.bindVtxAttribState(kVertexAttribState);
   s.present_cb.bindVtxBufferState(kVertexBufferState);
+}
+
+void recordRenderTargetState(Deko3DRenderContext& s, RenderTarget& target) {
+  recordRenderTargetState(s, target.image, target.width, target.height);
 }
 
 void recordNv12ToFramebufferPass(Deko3DRenderContext& s, const Tf& transform) {
@@ -1142,6 +1162,61 @@ void recordRcasPass(Deko3DRenderContext& s) {
   s.present_cb.bindUniformBuffer(DkStage_Fragment,0,s.rcas_uniform.getGpuAddr(),s.rcas_uniform.getSize());
   s.present_cb.draw(DkPrimitive_Quads,kQuadVertices.size(),1,0,0);
 }
+
+#if LUNARNX_LSFG
+// Borealis owns acquisition and presentation. Emit at most one image for its
+// current display iteration. Keep the source history until the following turn.
+bool recordLsfgFrame(Deko3DRenderContext& s, dk::Image* fb, dk::Image* db,
+                     bool new_frame) {
+  if (!s.lsfg || s.lsfg_failed) return false;
+  refreshTargetSize(s);
+  if (s.frame_w != 1280 || s.frame_h != 720 ||
+      s.target_w * 9 != s.target_h * 16) {
+    s.lsfg->reset();
+    s.lsfg_pending_original = nullptr;
+    s.lsfg_last_capture_ns = 0;
+    return false;
+  }
+
+  const dk::Image* output = s.lsfg_pending_original;
+  s.lsfg_pending_original = nullptr;
+  if (!output) {
+    if (!new_frame) return false;
+    const auto now = rendererMonotonicNowNs();
+    if (s.lsfg_last_capture_ns && now - s.lsfg_last_capture_ns > 90000000ULL)
+      s.lsfg->reset();
+    s.lsfg_last_capture_ns = now;
+    const auto& input = *s.lsfg->input();
+    recordRenderTargetState(s, input, 1280, 720);
+    recordNv12ToFramebufferPass(s, fullFrameTransform(1280, 720,
+                                                      s.color_space, s.color_full));
+    const dk::Image* generated = nullptr;
+    const dk::Image* original = nullptr;
+    std::string error;
+    const bool recorded = s.lsfg->record(s.present_cb, generated, original, error);
+    s.vctx->bindSharedDescriptors(s.present_cb);
+    if (!recorded) {
+      s.lsfg_failed = true;
+      lunar::persistentEventLog("lsfg", "%s", error.c_str());
+      return false;
+    }
+    output = generated ? generated : original;
+    s.lsfg_pending_original = original;
+  }
+
+  dk::ImageDescriptor descriptor;
+  descriptor.initialize(dk::ImageView{*output});
+  if (!s.vctx->updateImageDescriptor(s.present_cb, s.lsfg_texture_slot, descriptor)) {
+    s.lsfg_failed = true;
+    s.lsfg_pending_original = nullptr;
+    return false;
+  }
+  s.vctx->invalidateImageDescriptors(s.present_cb);
+  recordFramebufferState(s, fb, db);
+  recordPostProcessBlitPass(s, s.lsfg_texture_slot, s.dithering_enabled);
+  return true;
+}
+#endif
 
 void recordPresentPipeline(Deko3DRenderContext& s,
                            dk::Image* fb,
@@ -1683,6 +1758,18 @@ bool VideoRenderer::initialize(const char*,int w,int h){
   s->target_h = brls::Application::windowHeight > 0
       ? static_cast<int>(brls::Application::windowHeight)
       : static_cast<int>(brls::Application::ORIGINAL_WINDOW_HEIGHT);
+#if LUNARNX_LSFG
+  if (lsfg_30fps_ && w == 1280 && h == 720 && s->blit_fs) {
+    s->lsfg_texture_slot = s->vctx->allocateImageIndex();
+    if (s->lsfg_texture_slot >= 0) {
+      const char* folder = "sdmc:/switch/LunarNX/lsfg";
+      const char* dll = "sdmc:/switch/LunarNX/lsfg/Lossless.dll";
+      std::string error;
+      s->lsfg = NativeLsfg::create(s->dev, 1280, 720, true, 4, dll, folder, error);
+      lunar::persistentEventLog("lsfg", "%s", s->lsfg ? "720p session prepared" : error.c_str());
+    }
+  }
+#endif
   configurePresentPipeline(s->pipeline, s->post_process_mode_requested);
   s->static_state_dirty=true;
   s->ok=true;fprintf(stderr,"[render] deko3d ok\n");return true;
@@ -2112,7 +2199,10 @@ void VideoRenderer::present(){
                    "fb=%p db=%p static_dirty=%d queue_error=%d",
                    fb, db, s->static_state_dirty ? 1 : 0,
                    s->q && s->q.isInErrorState() ? 1 : 0);
-  recordPresentPipeline(*s,fb,db,perf_);
+#if LUNARNX_LSFG
+  if (!recordLsfgFrame(*s, fb, db, advanced_to_new_frame))
+#endif
+    recordPresentPipeline(*s,fb,db,perf_);
   hardwareProbeLog(frame_id, "record-pipeline-end",
                    "pipeline_passes=%zu target=%dx%d queue_error=%d",
                    s->pipeline.pass_count, s->target_w, s->target_h,
@@ -2254,6 +2344,15 @@ void VideoRenderer::shutdown(){
   releaseRetainedFrames(*s);
   s->resolution_transition.reset();
   destroyPostProcessTargets(*s);
+#if LUNARNX_LSFG
+  s->lsfg.reset();
+  s->lsfg_pending_original = nullptr;
+  s->lsfg_last_capture_ns = 0;
+  s->lsfg_failed = false;
+  if (s->vctx && s->lsfg_texture_slot >= 0)
+    s->vctx->freeImageIndex(s->lsfg_texture_slot);
+  s->lsfg_texture_slot = -1;
+#endif
   s->vertex_buf.destroy();
   s->easu_uniform.destroy();
   s->rcas_uniform.destroy();

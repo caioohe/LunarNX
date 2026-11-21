@@ -61,6 +61,7 @@ public:
     void setPresentationMode(VideoPresentationMode mode) {
         presentation_mode_.store(mode, std::memory_order_release);
     }
+    void setLsfg30fps(bool enabled) { lsfg_30fps_ = enabled; }
     void setPostProcessMode(PostProcessMode mode);
     void setPostProcessEnabled(bool enabled);
     void setDitheringEnabled(bool enabled, float strength = 3.0f);
@@ -95,6 +96,7 @@ private:
     PostProcessMode requested_post_process_mode_ = PostProcessMode::Off;
     bool requested_dithering_enabled_ = false;
     float requested_dithering_strength_ = 3.0f;
+    bool lsfg_30fps_ = false;
     bool hold_non_target_startup_frames_ = false;
     std::atomic<VideoPresentationMode> presentation_mode_{
         VideoPresentationMode::BufferedFifo};

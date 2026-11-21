@@ -204,6 +204,7 @@ bool MediaPipeline::initialize(int width, int height, PerfStats* perf,
             options.video_presentation_mode);
         video_renderer_->setProgressSink(&renderer_stage_,
                                          &renderer_stage_started_ns_);
+        video_renderer_->setLsfg30fps(options.lsfg_30fps);
         video_renderer_->setPostProcessMode(options.post_process_mode);
         video_renderer_->setDitheringEnabled(options.dithering_enabled,
                                              options.dithering_strength);

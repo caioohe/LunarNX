@@ -385,6 +385,8 @@
   "settings_bitrate": "Bitrate",
   "settings_controller_section": "Controller",
   "settings_controller_detail": "PlayStation streaming button mapping",
+  "settings_lsfg": "Frame Generation (30 FPS games)",
+  "settings_lsfg_hint": "Experimental · 720p · Requires lsfg/Lossless.dll in the LunarNX folder",
   "settings_codec": "Video codec",
   "tab_local": "Local Remote Play",
   "tab_remote": "Remote via PSN",

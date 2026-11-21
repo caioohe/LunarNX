@@ -112,6 +112,18 @@ For remote PS5 play through PSN:
 
 Local Remote Play uses the user registered with the console pairing PIN.
 
+An LSFG-enabled build offers **Frame Generation (30 FPS games)** in PlayStation
+settings. Put your own `Lossless.dll` at
+`sdmc:/switch/LunarNX/lsfg/Lossless.dll`, select 720p and reconnect. The first
+connection prepares and caches the shaders. Use the option only with 30 FPS
+games on a 60 Hz display. It assumes a 30 FPS source and does not detect
+duplicate video frames. Turn it off for native 60 FPS games. If LSFG cannot
+initialize or the video is outside the supported mode, normal presentation is
+used. The runtime records preparation errors in `lunarnx.log` or the event log.
+
+The container build uses `LSFG=1` by default and needs Bison, Flex and Python
+Mako. Use `LSFG=0` to build without it.
+
 If the PlayStation user profile has a four-digit login PIN, LunarNX will request it during connection.
 
 Start with 720p if network quality is uncertain. PSN connection establishment can take up to a minute on some networks.

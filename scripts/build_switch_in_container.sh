@@ -24,6 +24,7 @@ app_title="${APP_TITLE:-LunarNX}"
 git_commit="${GIT_COMMIT:-$(git -C "$project_root" rev-parse --short HEAD 2>/dev/null || echo unknown)}"
 dev_bridge_upload_token="${DEV_BRIDGE_UPLOAD_TOKEN:-}"
 build_jobs="${BUILD_JOBS:-$(nproc)}"
+export LSFG="${LSFG:-1}"
 
 if [[ ! -d "$project_root/lib/borealis/.git" ||
       ! -d "$project_root/lib/libpeer/.git" ]]; then
@@ -67,6 +68,10 @@ case "$curl_provider" in
 esac
 
 echo "Building Borealis"
+lsfg_borealis_flags=()
+if [[ "${LSFG:-0}" == 1 ]]; then
+    lsfg_borealis_flags=(-DCMAKE_CXX_FLAGS=-DLUNARNX_LSFG=1)
+fi
 git -C "$project_root/lib/borealis" apply --reverse --check \
     "$project_root/tools/borealis_switch/lunarnx-borealis-gpu-lifecycle.patch"
 git -C "$project_root/lib/borealis" apply --reverse --check \
@@ -75,6 +80,7 @@ rm -rf "$project_root/lib/borealis/build_switch"
 cmake -S "$project_root/lib/borealis" \
     -B "$project_root/lib/borealis/build_switch" \
     -DCMAKE_TOOLCHAIN_FILE="$DEVKITPRO/cmake/Switch.cmake" \
+    "${lsfg_borealis_flags[@]}" \
     -DPLATFORM_SWITCH=ON \
     -DUSE_DEKO3D=ON \
     -DBOREALIS_USE_DEKO3D=ON \
@@ -135,9 +141,24 @@ for crypto_member in aes_icm_mbedtls.o aes_gcm_mbedtls.o hmac_mbedtls.o; do
     fi
 done
 
+if [[ "${LSFG:-0}" == 1 ]]; then
+    if ! command -v bison >/dev/null || ! command -v flex >/dev/null ||
+       ! python3 -c 'import mako' >/dev/null 2>&1; then
+        if [[ "${GITHUB_ACTIONS:-}" == true ]]; then
+            apt-get update
+            apt-get install -y --no-install-recommends bison flex python3-mako
+        else
+            echo "LSFG needs bison, flex and Python Mako, or build with LSFG=0." >&2
+            exit 2
+        fi
+    fi
+    "$project_root/scripts/build_lsfg_switch.sh"
+fi
+
 echo "Building LunarNX"
 make -C "$project_root" -f Makefile.switch clean
 make -C "$project_root" -f Makefile.switch -j"$build_jobs" \
+    LSFG="${LSFG:-0}" \
     NETWORK_DIAG="$network_diag" \
     APP_DIAG="$app_diag" \
     DROP_DIAG="$drop_diag" \
