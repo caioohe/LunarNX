@@ -74,7 +74,7 @@ def main():
             "psnAuth().refreshToken(" in connect_worker,
             "remote loading must provide a one-shot refresh for server-rejected tokens")
     require("PsnAuthErrorKind::SessionExpired" in connect_worker and
-            "manager->psnAuth().signOut()" in connect_worker and
+            "manager->forgetPsnSession()" in connect_worker and
             "new PsnLoginActivity(manager)" in connect_worker,
             "rejected refresh credentials must be cleared and return to PSN login")
     require("setLaunchCallback({})" in ui and "setLoginPinCallback({})" in ui,

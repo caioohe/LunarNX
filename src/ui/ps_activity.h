@@ -58,6 +58,7 @@ private:
     brls::Button* psn_button_ = nullptr;
     bool resumed_once_ = false;
     bool had_psn_session_ = false;
+    common::OperationGeneration::Ticket previous_psn_generation_{};
     bool psn_cache_loaded_ = false;
     bool console_list_refresh_suspended_ = false;
     bool console_list_refresh_pending_ = false;

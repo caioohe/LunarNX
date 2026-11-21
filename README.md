@@ -105,9 +105,12 @@ For remote PS5 play through PSN:
 
 1. Open the PlayStation page and choose PlayStation Network sign-in.
 2. Scan the displayed QR code with a phone on the same network, complete Sony sign-in, and send the result back to LunarNX from the phone helper page.
-3. Refresh the PSN device list.
-4. Select a PS5 with Remote Play enabled.
-5. Wait while LunarNX creates the PSN session, establishes the control and data paths, and starts the Chiaki streaming session.
+3. Open **PSN Accounts** → **Add Account** to save another login. Choose a saved account to switch PS5 users. The app remembers the last account you selected.
+4. Refresh the PSN device list if needed.
+5. Select a PS5 with Remote Play enabled.
+6. Wait while LunarNX creates the PSN session, establishes the control and data paths, and starts the Chiaki streaming session.
+
+Local Remote Play uses the user registered with the console pairing PIN.
 
 If the PlayStation user profile has a four-digit login PIN, LunarNX will request it during connection.
 

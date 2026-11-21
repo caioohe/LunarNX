@@ -48,6 +48,7 @@ public:
     bool refreshIdentity(CancelCallback cancel = {});
     bool loadToken(const std::string& path);
     bool saveToken(const std::string& path) const;
+    bool replaceSession(const PsnAuthManager& source, const std::string& path);
     void signOut();
 
     std::string getAccessToken() const;

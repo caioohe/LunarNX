@@ -23,6 +23,8 @@ private:
     std::shared_ptr<ps::PsManager> manager_;
     std::shared_ptr<std::atomic<bool>> alive_ =
         std::make_shared<std::atomic<bool>>(true);
+    std::shared_ptr<ps::PsnAuthManager> login_auth_ =
+        std::make_shared<ps::PsnAuthManager>();
     ps::PsnCallbackServer callback_server_;
 
     brls::Label* status_ = nullptr;

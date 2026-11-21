@@ -20,7 +20,7 @@ def main() -> None:
     assert "void confirmSignOut();" in ps_header
     assert "new brls::Dialog(" in ps_ui
     assert "sign_out_confirm_message" in ps_ui
-    assert 'ps_manager_->psnAuth().signOut();' in ps_ui
+    assert 'ps_manager_->forgetPsnSession()' in ps_ui
 
     for language in ("en-US", "zh-Hans", "zh-Hant"):
         text = (ROOT / f"romfs/i18n/{language}/lunarnx.json").read_text()

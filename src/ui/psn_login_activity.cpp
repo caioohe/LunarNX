@@ -128,7 +128,7 @@ brls::View* PsnLoginActivity::createContentView() {
 }
 
 void PsnLoginActivity::startPhoneLogin() {
-    auto& auth = manager_->psnAuth();
+    auto& auth = *login_auth_;
     const std::string login_url = auth.startAuth();
     if (login_url.empty()) {
         if (status_) {
@@ -182,22 +182,23 @@ void PsnLoginActivity::exchangeInBackground(std::string input) {
     lunar::diagnosticLog("ui-psn-login", "token exchange requested input_len=%zu", input.size());
     auto alive = alive_;
     auto manager = manager_;
+    auto login_auth = login_auth_;
     auto* status_ptr = status_;
     bool started = lunar::platform::startNetworkWorker("psn-token-exchange",
-        [alive, manager, status_ptr, input = std::move(input)]() {
-            auto& auth = manager->psnAuth();
+        [alive, manager, login_auth, status_ptr, input = std::move(input)]() {
+            auto& auth = *login_auth;
             bool authenticated = auth.submitRedirectUrl(
                 input, {}, [alive]() { return !alive->load(); });
-            bool saved = authenticated && alive->load() &&
-                auth.saveToken(lunar::get_psn_token_path());
-            std::string error = authenticated && !saved
-                ? "Signed in, but could not save the PSN session"
-                : auth.getAuthError();
-            brls::sync([alive, status_ptr, authenticated, saved, error = std::move(error)]() {
+            std::string error = auth.getAuthError();
+            brls::sync([alive, manager, login_auth, status_ptr, authenticated,
+                        error = std::move(error)]() mutable {
                 if (!alive->load()) return;
-                if (authenticated && saved) {
+                if (authenticated && manager->activatePsnProfile(*login_auth)) {
                     brls::Application::popActivity(brls::TransitionAnimation::NONE);
-                } else if (status_ptr) {
+                    return;
+                }
+                if (authenticated) error = brls::getStr("lunarnx/ps/account_save_failed");
+                if (status_ptr) {
                     status_ptr->setText("Sign-in failed: " + error +
                         ". Press B and try again to generate a new QR code.");
                     status_ptr->setTextColor(uiPalette().error);

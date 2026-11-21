@@ -40,6 +40,74 @@ void appendMockReplayConsole(std::vector<ps::PsConsole>& hosts) {
     hosts.push_back(std::move(mock));
 }
 
+class PsnProfilesActivity : public brls::Activity {
+public:
+    using Action = std::function<void()>;
+    using SelectAction = std::function<void(const std::string&)>;
+
+    PsnProfilesActivity(std::vector<ps::PsnProfile> profiles, std::string active,
+                        SelectAction select, Action add, Action forget)
+        : profiles_(std::move(profiles)), active_(std::move(active)),
+          select_(std::move(select)), add_(std::move(add)), forget_(std::move(forget)) {}
+
+    brls::View* createContentView() override {
+        auto* scroll = new brls::ScrollingFrame();
+        scroll->setBackgroundColor(uiPalette().background);
+        scroll->setScrollingBehavior(brls::ScrollingBehavior::CENTERED);
+        scroll->registerAction(brls::getStr("lunarnx/common/back"),
+            brls::ControllerButton::BUTTON_B, [](brls::View*) {
+                brls::Application::popActivity(brls::TransitionAnimation::NONE);
+                return true;
+            });
+        auto* root = new brls::Box(brls::Axis::COLUMN);
+        root->setPadding(18, 34, 30, 34);
+        root->setAlignItems(brls::AlignItems::CENTER);
+        std::vector<std::vector<brls::View*>> navigation;
+
+        auto add_button = [&](const std::string& label, bool primary, Action action) {
+            auto* card = makeUiCard(brls::Axis::COLUMN);
+            card->setWidth(620);
+            card->setPadding(8, 16, 8, 16);
+            card->setMarginBottom(10);
+            auto* button = new brls::Button();
+            if (primary) stylePrimaryButton(button);
+            else styleSecondaryButton(button);
+            button->setText(label);
+            button->registerClickAction([action = std::move(action)](brls::View*) {
+                brls::Application::popActivity(brls::TransitionAnimation::NONE, action);
+                return true;
+            });
+            card->addView(button);
+            root->addView(card);
+            navigation.push_back({button});
+        };
+
+        for (size_t index = 0; index < profiles_.size(); ++index) {
+            const auto& profile = profiles_[index];
+            const bool current = profile.account_id == active_;
+            auto name = profile.online_id.empty()
+                ? brls::getStr("lunarnx/ps/account_number", index + 1) : profile.online_id;
+            if (current) name = brls::getStr("lunarnx/ps/account_active", name);
+            add_button(name, current, [select = select_, id = profile.account_id]() {
+                select(id);
+            });
+        }
+        add_button(brls::getStr("lunarnx/ps/add_account"), profiles_.empty(), add_);
+        if (forget_) add_button(brls::getStr("lunarnx/common/sign_out"), false, forget_);
+
+        wireVerticalGridNavigation(navigation);
+        scroll->setContentView(root);
+        return makeAppFrame(brls::getStr("lunarnx/ps/accounts_title"), scroll);
+    }
+
+private:
+    std::vector<ps::PsnProfile> profiles_;
+    std::string active_;
+    SelectAction select_;
+    Action add_;
+    Action forget_;
+};
+
 struct PsConnectContext {
     std::atomic<bool> alive{true};
     std::atomic<bool> cancel_requested{false};
@@ -249,9 +317,7 @@ public:
                                     error.empty() ? "unspecified" : error.c_str());
                                 if (auth_error_kind ==
                                     ps::PsnAuthErrorKind::SessionExpired) {
-                                    manager->psnAuth().signOut();
-                                    std::remove(lunar::get_psn_token_path());
-                                    manager->clearPsnDeviceCache();
+                                    manager->forgetPsnSession();
                                 }
                             } else if (token_refreshed &&
                                        !manager->psnAuth().saveToken(
@@ -286,10 +352,7 @@ public:
                                                 manager->psnAuth().getAuthErrorKind() ==
                                                 ps::PsnAuthErrorKind::SessionExpired;
                                             if (session_expired) {
-                                                manager->psnAuth().signOut();
-                                                std::remove(
-                                                    lunar::get_psn_token_path());
-                                                manager->clearPsnDeviceCache();
+                                                manager->forgetPsnSession();
                                             }
                                             return false;
                                         }
@@ -712,8 +775,10 @@ void PsActivity::onResume() {
         std::chrono::milliseconds(750);
     if (!ps_manager_) return;
     ps_manager_->loadCredentials();
-    ps_manager_->psnAuth().loadToken(lunar::get_psn_token_path());
     const bool has_session = ps_manager_->hasStoredPsnSession();
+    const auto generation = ps_manager_->psnProfileGeneration();
+    const bool account_changed = generation != previous_psn_generation_;
+    previous_psn_generation_ = generation;
     updateAccountUi();
     console_list_refresh_suspended_ = false;
     if (console_list_refresh_pending_) {
@@ -734,7 +799,7 @@ void PsActivity::onResume() {
 
     // Existing sessions may not have an online_id stored yet; fetch it once so
     // the account name shows without requiring a re-login.
-    if (has_session && ps_manager_->hasPsnToken() &&
+    if (!resumed_once_ && has_session && ps_manager_->hasPsnToken() &&
         ps_manager_->psnAuth().getOnlineId().empty() && !identity_fetching_->exchange(true)) {
         auto manager = ps_manager_;
         auto alive = alive_;
@@ -758,7 +823,7 @@ void PsActivity::onResume() {
         resumed_once_ = true;
         had_psn_session_ = has_session;
     } else {
-        if (has_session && !had_psn_session_) fetchPsnConsoles();
+        if (has_session && (!had_psn_session_ || account_changed)) fetchPsnConsoles();
         had_psn_session_ = has_session;
     }
 }
@@ -771,7 +836,7 @@ void PsActivity::startLanDiscovery() {
     const bool started = ps_manager_->startDiscovery([this, alive](const std::vector<ps::PsConsole>& hosts) {
         if (!alive->load()) return;
         if (completePendingWake(hosts)) return;
-        rebuildConsoleList(hosts);
+        rebuildConsoleList(ps_manager_->getDiscoveredHosts());
         if (lan_state_) {
             size_t local_count = 0;
             for (const auto& host : hosts) local_count += host.local.has_value();
@@ -812,18 +877,21 @@ void PsActivity::fetchPsnConsoles() {
                     updateAccountUi();
                     if (psn_state_) psn_state_->setText(brls::getStr("lunarnx/ps/psn_refresh_done"));
                 });
-            fetching->store(false);
-            if (!ok) {
+            if (ok) {
+                brls::sync([fetching]() { fetching->store(false); });
+            } else {
                 std::string error = manager->getPsnDeviceError();
                 if (error.empty()) error = manager->psnAuth().getAuthError();
                 auto error_kind = manager->psnAuth().getAuthErrorKind();
-                brls::sync([this, alive, manager, error_kind,
+                brls::sync([this, alive, manager, fetching, error_kind,
                             error = std::move(error)]() {
+                    fetching->store(false);
                     if (!alive->load()) return;
                     if (error_kind == ps::PsnAuthErrorKind::SessionExpired) {
-                        manager->psnAuth().signOut();
-                        std::remove(lunar::get_psn_token_path());
-                        manager->clearPsnDeviceCache();
+                        manager->forgetPsnSession();
+                        had_psn_session_ = false;
+                        updateAccountUi();
+                        rebuildConsoleList(manager->getDiscoveredHosts());
                         if (psn_state_) psn_state_->setText(
                             brls::getStr("lunarnx/ps/psn_session_expired", error));
                         brls::Application::pushActivity(
@@ -1187,6 +1255,11 @@ void PsActivity::connectToConsole(const ps::PsConsole& host) {
                   host.nickname.c_str(),
                   host.local.has_value() ? "true" : "false",
                   host.remote.has_value() ? "true" : "false");
+    if (source_ == PsConsoleSource::Remote &&
+        (psn_fetching_->load() || identity_fetching_->load())) {
+        if (action_status_) action_status_->setText(brls::getStr("lunarnx/ps/account_busy"));
+        return;
+    }
     const auto preference = source_ == PsConsoleSource::Local
         ? ps::PsConnectionPreference::LocalOnly
         : ps::PsConnectionPreference::RemoteOnly;
@@ -1253,19 +1326,43 @@ void PsActivity::updateAccountUi() {
             : stored ? brls::getStr("lunarnx/ps/account_refresh_needed")
                      : brls::getStr("lunarnx/common/not_signed_in"));
     }
-    if (account_button_) account_button_->setText(stored
-        ? brls::getStr("lunarnx/ps/switch_account")
-        : brls::getStr("lunarnx/ps/sign_in"));
+    if (account_button_) account_button_->setText(brls::getStr("lunarnx/ps/accounts_title"));
     if (psn_state_ && !stored)
         psn_state_->setText(brls::getStr("lunarnx/ps/psn_sign_in_hint"));
 }
 
 void PsActivity::handleAccountAction() {
-    if (!ps_manager_->hasStoredPsnSession()) {
+    if (psn_fetching_->load() || identity_fetching_->load()) {
+        if (action_status_) action_status_->setText(brls::getStr("lunarnx/ps/account_busy"));
+        return;
+    }
+    auto profiles = ps_manager_->savedPsnProfiles();
+    if (profiles.empty()) {
         signInToPsn();
         return;
     }
-    confirmSignOut();
+    auto alive = alive_;
+    PsnProfilesActivity::Action forget;
+    if (ps_manager_->hasStoredPsnSession()) {
+        forget = [this, alive]() { if (alive->load()) confirmSignOut(); };
+    }
+    brls::Application::pushActivity(new PsnProfilesActivity(
+        std::move(profiles), ps_manager_->getPsnAccountId(),
+        [this, alive](const std::string& id) {
+            if (!alive->load()) return;
+            if (!ps_manager_->selectPsnProfile(id)) {
+                if (action_status_) action_status_->setText(
+                    brls::getStr("lunarnx/ps/account_save_failed"));
+                return;
+            }
+            previous_psn_generation_ = ps_manager_->psnProfileGeneration();
+            had_psn_session_ = true;
+            updateAccountUi();
+            rebuildConsoleList(ps_manager_->getDiscoveredHosts());
+            fetchPsnConsoles();
+        },
+        [this, alive]() { if (alive->load()) signInToPsn(); },
+        std::move(forget)), brls::TransitionAnimation::NONE);
 }
 
 void PsActivity::confirmSignOut() {
@@ -1273,69 +1370,19 @@ void PsActivity::confirmSignOut() {
         brls::getStr("lunarnx/common/sign_out_confirm_message"));
     dialog->addButton(brls::getStr("lunarnx/common/cancel"), []() {});
     dialog->addButton(brls::getStr("lunarnx/common/sign_out"), [this]() {
-        ps_manager_->psnAuth().signOut();
-        std::remove(lunar::get_psn_token_path());
-        ps_manager_->clearPsnDeviceCache();
+        if (!ps_manager_->forgetPsnSession()) {
+            if (action_status_) action_status_->setText(
+                brls::getStr("lunarnx/ps/account_save_failed"));
+            return;
+        }
         had_psn_session_ = false;
         updateAccountUi();
-        brls::Application::pushActivity(
-            new PsnLoginActivity(ps_manager_),
-            brls::TransitionAnimation::NONE);
+        rebuildConsoleList(ps_manager_->getDiscoveredHosts());
     });
     dialog->open();
 }
 
 void PsActivity::signInToPsn() {
-    auto& auth = ps_manager_->psnAuth();
-    if (auth.hasValidToken()) {
-        updateAccountUi();
-        return;
-    }
-    auth.loadToken(lunar::get_psn_token_path());
-    if (auth.hasValidToken()) {
-        updateAccountUi();
-        return;
-    }
-    if (auth.hasStoredSession()) {
-        if (psn_state_) psn_state_->setText(brls::getStr("lunarnx/ps/psn_restoring"));
-        auto manager = ps_manager_;
-        auto alive = alive_;
-        bool started = lunar::platform::startNetworkWorker("psn-session-refresh",
-            [this, manager, alive]() {
-                bool token_refreshed = false;
-                bool ok = manager->psnAuth().ensureValidToken({}, &token_refreshed);
-                if (ok && token_refreshed) {
-                    ok = manager->psnAuth().saveToken(lunar::get_psn_token_path());
-                }
-                std::string error = manager->psnAuth().getAuthError();
-                auto error_kind = manager->psnAuth().getAuthErrorKind();
-                brls::sync([this, manager, alive, ok, error_kind,
-                            error = std::move(error)]() {
-                    if (!alive->load()) return;
-                    if (ok) {
-                        updateAccountUi();
-                        fetchPsnConsoles();
-                    } else {
-                        if (error_kind == ps::PsnAuthErrorKind::SessionExpired) {
-                            manager->psnAuth().signOut();
-                            std::remove(lunar::get_psn_token_path());
-                            manager->clearPsnDeviceCache();
-                            if (psn_state_) psn_state_->setText(
-                                brls::getStr("lunarnx/ps/psn_session_expired", error));
-                            brls::Application::pushActivity(
-                                new PsnLoginActivity(manager),
-                                brls::TransitionAnimation::NONE);
-                        } else {
-                            if (psn_state_) psn_state_->setText(
-                                brls::getStr("lunarnx/ps/psn_unavailable", error));
-                            updateAccountUi();
-                        }
-                    }
-                });
-            });
-        if (!started && psn_state_) psn_state_->setText(brls::getStr("lunarnx/ps/psn_could_not_restore"));
-        return;
-    }
     brls::Application::pushActivity(
         new PsnLoginActivity(ps_manager_), brls::TransitionAnimation::NONE);
 }

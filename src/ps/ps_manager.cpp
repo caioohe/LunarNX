@@ -9,12 +9,48 @@
 #include "../common.h"
 #include "../diagnostics.h"
 #include <borealis.hpp>
+#include <algorithm>
 #include <cerrno>
+#include <cstdio>
+#include <dirent.h>
+#include <tuple>
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
 
 namespace lunar::ps {
+
+namespace {
+
+constexpr char kProfilePrefix[] = "psn_profile_";
+
+std::string profileDirectory() {
+    const std::string token_path = get_psn_token_path();
+    return token_path.substr(0, token_path.rfind('/') + 1);
+}
+
+std::string profileFilename(const std::string& account_id) {
+    std::string bytes;
+    if (!base64Decode(account_id, bytes) || bytes.size() != 8) return {};
+    constexpr char hex[] = "0123456789abcdef";
+    std::string name = kProfilePrefix;
+    for (unsigned char byte : bytes) {
+        name += hex[byte >> 4];
+        name += hex[byte & 15];
+    }
+    return name + ".json";
+}
+
+bool removeIfPresent(const std::string& path) {
+    return std::remove(path.c_str()) == 0 || errno == ENOENT;
+}
+
+bool removeSessionFiles(const std::string& path) {
+    return removeIfPresent(path + ".bak") && removeIfPresent(path + ".tmp") &&
+        removeIfPresent(path);
+}
+
+} // namespace
 
 PsManager::PsManager()
     : chiaki_log_(makeChiakiDiagnosticLog("chiaki-ps")) {
@@ -106,6 +142,72 @@ bool PsManager::fetchPsnDevices(HostListCallback cb) {
         diagnosticLog("ps-manager", "PSN console cache save failed");
     }
     psn_device_error_.clear();
+    return true;
+}
+
+std::vector<PsnProfile> PsManager::savedPsnProfiles() const {
+    std::vector<PsnProfile> profiles;
+    const auto active = getPsnAccountId();
+    const bool has_active = hasStoredPsnSession();
+    if (has_active) profiles.push_back({active, psn_auth_.getOnlineId()});
+
+    const auto directory = profileDirectory();
+    std::unique_ptr<DIR, decltype(&closedir)> entries(opendir(directory.c_str()), &closedir);
+    if (!entries) return profiles;
+    while (const auto* entry = readdir(entries.get())) {
+        std::string name = entry->d_name;
+        if (name.size() >= 4 && name.compare(name.size() - 4, 4, ".bak") == 0) {
+            name.resize(name.size() - 4);
+        }
+        if (name.compare(0, sizeof(kProfilePrefix) - 1, kProfilePrefix) != 0 ||
+            name.size() != sizeof(kProfilePrefix) - 1 + 16 + 5 ||
+            name.compare(name.size() - 5, 5, ".json") != 0) continue;
+        PsnAuthManager session;
+        if (!session.loadToken(directory + name)) continue;
+        const auto id = session.getAccountId();
+        const auto matches = [&id](const PsnProfile& profile) {
+            return profile.account_id == id;
+        };
+        if (id != active && name == profileFilename(id) &&
+            std::none_of(profiles.begin(), profiles.end(), matches)) {
+            profiles.push_back({id, session.getOnlineId()});
+        }
+    }
+    std::sort(profiles.begin() + (has_active ? 1 : 0), profiles.end(),
+        [](const PsnProfile& a, const PsnProfile& b) {
+            return std::tie(a.online_id, a.account_id) < std::tie(b.online_id, b.account_id);
+        });
+    return profiles;
+}
+
+bool PsManager::selectPsnProfile(const std::string& account_id) {
+    if (account_id == getPsnAccountId()) return hasStoredPsnSession();
+    const auto name = profileFilename(account_id);
+    PsnAuthManager session;
+    return !name.empty() && session.loadToken(profileDirectory() + name) &&
+        session.getAccountId() == account_id && activatePsnProfile(session);
+}
+
+bool PsManager::activatePsnProfile(const PsnAuthManager& session) {
+    const auto next_id = session.getAccountId();
+    if (profileFilename(next_id).empty()) return false;
+    const auto previous_id = getPsnAccountId();
+    if (hasStoredPsnSession() && previous_id != next_id) {
+        const auto name = profileFilename(previous_id);
+        if (name.empty() || !psn_auth_.saveToken(profileDirectory() + name)) return false;
+    }
+    if (!psn_auth_.replaceSession(session, get_psn_token_path())) return false;
+    psn_profile_generation_.invalidate();
+    loadPsnDeviceCache();
+    return true;
+}
+
+bool PsManager::forgetPsnSession() {
+    const auto name = profileFilename(getPsnAccountId());
+    if (!name.empty() && !removeSessionFiles(profileDirectory() + name)) return false;
+    if (!removeSessionFiles(get_psn_token_path())) return false;
+    psn_auth_.signOut();
+    clearPsnDeviceCache();
     return true;
 }
 

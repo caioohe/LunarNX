@@ -544,6 +544,7 @@ bool PsnAuthManager::loadToken(const std::string& path) {
     std::lock_guard<std::mutex> request_lock(request_mutex_);
     if (!request_generation_.isCurrent(ticket)) return false;
     FILE* file = std::fopen(path.c_str(), "r");
+    if (!file && errno == ENOENT) file = std::fopen((path + ".bak").c_str(), "r");
     if (!file) return false;
     std::fseek(file, 0, SEEK_END);
     long length = std::ftell(file);
@@ -639,6 +640,26 @@ bool PsnAuthManager::saveToken(const std::string& path) const {
         return false;
     }
     if (had_existing) std::remove(backup_path.c_str());
+    return true;
+}
+
+bool PsnAuthManager::replaceSession(const PsnAuthManager& source, const std::string& path) {
+    if (&source == this) return false;
+    std::lock_guard<std::mutex> request_lock(request_mutex_);
+    if (!source.saveToken(path)) return false;
+    request_generation_.invalidate();
+    std::scoped_lock lock(mutex_, source.mutex_);
+    access_token_ = source.access_token_;
+    refresh_token_ = source.refresh_token_;
+    account_id_ = source.account_id_;
+    online_id_ = source.online_id_;
+    duid_ = source.duid_;
+    expires_in_ = source.expires_in_;
+    expires_at_ms_ = source.expires_at_ms_;
+    login_url_.clear();
+    error_.clear();
+    error_kind_ = PsnAuthErrorKind::None;
+    state_.store(source.state_.load());
     return true;
 }
 

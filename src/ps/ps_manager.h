@@ -22,6 +22,11 @@ namespace lunar::ps {
 
 class PsRegistration;
 
+struct PsnProfile {
+    std::string account_id;
+    std::string online_id;
+};
+
 class PsManager {
 public:
     using HostListCallback = std::function<void(const std::vector<PsConsole>&)>;
@@ -48,6 +53,12 @@ public:
     std::string getPairingAccountId(const std::string& console_key = {}) const;
     bool saveManualPairingAccountId(const std::string& account_id,
                                     const std::string& console_key = {});
+
+    std::vector<PsnProfile> savedPsnProfiles() const;
+    bool selectPsnProfile(const std::string& account_id);
+    bool activatePsnProfile(const PsnAuthManager& session);
+    bool forgetPsnSession();
+    auto psnProfileGeneration() const { return psn_profile_generation_.capture(); }
 
     // PSN device list (requires valid token)
     bool fetchPsnDevices(HostListCallback cb);
@@ -80,6 +91,7 @@ private:
     PsnAuthManager psn_auth_;
     std::unique_ptr<PsConsoleRepository> repository_;
     common::OperationGeneration psn_device_generation_;
+    common::OperationGeneration psn_profile_generation_;
     std::unique_ptr<PsRegistration> registration_;
     std::atomic<uint64_t> registration_generation_{0};
     std::shared_ptr<std::atomic<bool>> alive_ =

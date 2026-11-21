@@ -119,13 +119,23 @@ def main():
 
     confirm_sign_out = ps_ui.split("void PsActivity::confirmSignOut", 1)[1].split(
         "void PsActivity::signInToPsn", 1)[0]
-    require("clearPsnDeviceCache()" in confirm_sign_out and
-            "return;\n                            manager->clearPsnDeviceCache()" not in ps_ui,
+    require("forgetPsnSession()" in confirm_sign_out and
+            "clearPsnDeviceCache()" in manager.split("bool PsManager::forgetPsnSession", 1)[1]
+                .split("bool PsManager::loadPsnDeviceCache", 1)[0],
             "explicit and expired-session sign-out must clear PSN device identity")
     device_worker_failure = ps_ui.split('startNetworkWorker("psn-device-list"', 1)[1]
     device_worker_failure = device_worker_failure.split("if (!started)", 1)[1].split("}", 1)[0]
-    require("clearPsnDeviceCache" not in device_worker_failure,
+    require("forgetPsnSession" not in device_worker_failure,
             "thread resource failure must not delete a valid PSN device cache")
+
+    activate = manager.split("bool PsManager::activatePsnProfile", 1)[1].split(
+        "bool PsManager::forgetPsnSession", 1)[0]
+    require(activate.index("psn_auth_.saveToken") < activate.index("psn_auth_.replaceSession") <
+            activate.index("loadPsnDeviceCache"),
+            "profile switch must archive the previous session and re-scope the device list")
+    require("login_auth_" in login_header and "manager->activatePsnProfile(*login_auth)" in login_ui
+            and "manager->psnAuth()" not in login_ui,
+            "cancelled or failed sign-in must leave the current account intact")
 
     print("PSN auth flow tests passed")
 
