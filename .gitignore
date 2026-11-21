@@ -36,6 +36,7 @@ romfs/*
 # Secrets
 token.json
 config.json
+config.json.ps.*
 auth.json
 credentials.json
 *.token.json

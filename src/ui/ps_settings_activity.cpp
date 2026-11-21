@@ -5,10 +5,12 @@
 #include "../common.h"
 #include <cJSON.h>
 #include <algorithm>
+#include <cerrno>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <sys/stat.h>
 
 namespace lunar::ui {
 namespace {
@@ -23,7 +25,9 @@ int rumbleStrengthIndex(int strength) {
 
 cJSON* readConfig() {
     cJSON* root = nullptr;
-    FILE* f = std::fopen(lunar::get_config_path(), "rb");
+    const std::string path = lunar::get_config_path();
+    FILE* f = std::fopen(path.c_str(), "rb");
+    if (!f && errno == ENOENT) f = std::fopen((path + ".ps.bak").c_str(), "rb");
     if (f) {
         std::fseek(f, 0, SEEK_END);
         long len = std::ftell(f);
@@ -39,12 +43,45 @@ cJSON* readConfig() {
 bool writeConfig(cJSON* root) {
     char* json = cJSON_Print(root);
     if (!json) return false;
-    FILE* f = std::fopen(lunar::get_config_path(), "wb");
+    const std::string path = lunar::get_config_path();
+    const auto temporary = path + ".ps.tmp";
+    const auto backup = path + ".ps.bak";
+    FILE* f = std::fopen(temporary.c_str(), "wb");
     bool ok = f && std::fputs(json, f) >= 0;
     if (f) ok = std::fclose(f) == 0 && ok;
     std::free(json);
-    return ok;
+    if (!ok) {
+        std::remove(temporary.c_str());
+        return false;
+    }
+    struct stat primary{};
+    const bool had_primary = ::stat(path.c_str(), &primary) == 0;
+    if ((!had_primary && errno != ENOENT) ||
+        (had_primary &&
+         ((std::remove(backup.c_str()) != 0 && errno != ENOENT) ||
+          std::rename(path.c_str(), backup.c_str()) != 0))) {
+        std::remove(temporary.c_str());
+        return false;
+    }
+    if (std::rename(temporary.c_str(), path.c_str()) != 0) {
+        if (had_primary) std::rename(backup.c_str(), path.c_str());
+        std::remove(temporary.c_str());
+        return false;
+    }
+    std::remove(backup.c_str());
+    return true;
 }
+
+#if LUNARNX_LSFG
+bool saveLsfgSetting(bool enabled) {
+    cJSON* root = readConfig();
+    cJSON_DeleteItemFromObject(root, "ps_lsfg_30fps");
+    const bool saved = cJSON_AddBoolToObject(root, "ps_lsfg_30fps", enabled) &&
+        writeConfig(root);
+    cJSON_Delete(root);
+    return saved;
+}
+#endif
 }
 
 PsSettingsSnapshot loadPsSettings() {
@@ -124,7 +161,14 @@ brls::View* PsSettingsActivity::createContentView() {
 #if LUNARNX_LSFG
     auto* lsfg = new brls::BooleanCell();
     lsfg->init(brls::getStr("lunarnx/ps/settings_lsfg"), settings_.lsfg_30fps,
-        [this](bool enabled) { settings_.lsfg_30fps = enabled; });
+        [this, lsfg](bool enabled) {
+            if (saveLsfgSetting(enabled)) {
+                settings_.lsfg_30fps = enabled;
+                return;
+            }
+            lsfg->setOn(settings_.lsfg_30fps, false);
+            brls::Application::notify(brls::getStr("lunarnx/ps/settings_save_failed"));
+        });
     card->addView(lsfg);
     card->addView(makeMutedLabel(brls::getStr("lunarnx/ps/settings_lsfg_hint"), 13));
 #endif
@@ -163,8 +207,11 @@ brls::View* PsSettingsActivity::createContentView() {
 
 void PsSettingsActivity::closeSettings() {
     if (closed_) return;
+    if (!savePsSettings(settings_)) {
+        brls::Application::notify(brls::getStr("lunarnx/ps/settings_save_failed"));
+        return;
+    }
     closed_ = true;
-    savePsSettings(settings_);
     if (completion_) completion_(settings_);
     brls::Application::popActivity(brls::TransitionAnimation::NONE);
 }

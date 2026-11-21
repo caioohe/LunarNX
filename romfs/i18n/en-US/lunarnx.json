@@ -385,6 +385,7 @@
   "settings_bitrate": "Bitrate",
   "settings_controller_section": "Controller",
   "settings_controller_detail": "PlayStation streaming button mapping",
+  "settings_save_failed": "Could not save the PlayStation settings.",
   "settings_lsfg": "Frame Generation (30 FPS games)",
   "settings_lsfg_hint": "Experimental · 720p · Requires lsfg/Lossless.dll in the LunarNX folder",
   "settings_codec": "Video codec",
