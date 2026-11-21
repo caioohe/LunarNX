@@ -612,7 +612,7 @@ brls::View* PsActivity::createContentView() {
     account_space->setJustifyContent(brls::JustifyContent::FLEX_END);
     account_space->addView(makeMutedLabel(
         brls::getStr("lunarnx/ps/account_network"), 11));
-    account_state_ = makeMutedLabel("", 12);
+    account_state_ = makeMutedLabel("", 15);
     account_state_->setSingleLine(true);
     account_space->addView(account_state_);
     account_button_ = makeSidebarButton("", false, UiIcon::Account);

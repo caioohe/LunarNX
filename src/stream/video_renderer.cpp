@@ -50,6 +50,11 @@ namespace lunar::stream {
 namespace {
   static constexpr unsigned UpdateCmdSliceSize = 0x1000;
   static constexpr unsigned PresentCmdSliceSize = 0x8000;
+#if LUNARNX_LSFG
+  // Match the command budget of the DraStic LSFG integration. Deko3D can
+  // terminate the process if a command list consumes its entire fixed slice.
+  static constexpr unsigned LsfgPresentCmdSliceSize = 512 * 1024;
+#endif
   // The Borealis sample ring waits forever. That is unsafe inside draw(): a
   // delayed GPU fence would hold the UI and media lifecycle locks forever.
   // A triple-buffered slice should normally already be ready; spend at most
@@ -556,6 +561,7 @@ struct Deko3DRenderContext {
   bool lsfg_capture_pending = false;
   uint64_t lsfg_last_capture_ns = 0;
   bool lsfg_failed = false;
+  bool lsfg_first_dispatch_submitted = false;
 #endif
   RenderTarget upscale_target;
   RenderTarget rcas_target;
@@ -1686,7 +1692,10 @@ bool VideoRenderer::initialize(const char*,int w,int h){
   if (lsfg_30fps_ && w == 1280 && h == 720) {
     const char* folder = "sdmc:/switch/LunarNX/lsfg";
     const char* dll = "sdmc:/switch/LunarNX/lsfg/Lossless.dll";
+    lunar::persistentEventLog("lsfg", "stage=shader-prepare begin");
     prepared_lsfg = NativeLsfg::prepare(true, 4, dll, folder, lsfg_error);
+    lunar::persistentEventLog("lsfg", "stage=shader-prepare result=%s",
+                              prepared_lsfg ? "ready" : "fallback");
     if (!prepared_lsfg) lunar::persistentEventLog("lsfg", "%s", lsfg_error.c_str());
   }
 #endif
@@ -1722,8 +1731,18 @@ bool VideoRenderer::initialize(const char*,int w,int h){
     s->update_ring.emplace();
     s->present_ring.emplace();
     s->retired_targets.reserve(MaxRetiredTargets);
+    bool present_ring_allocated = false;
+#if LUNARNX_LSFG
+    if (prepared_lsfg) {
+      present_ring_allocated = s->present_ring->allocate(*s->pd, LsfgPresentCmdSliceSize);
+      if (!present_ring_allocated) {
+        prepared_lsfg.reset();
+        lunar::persistentEventLog("lsfg", "stage=command-memory result=fallback");
+      }
+    }
+#endif
     if(!s->update_ring->allocate(*s->pd,UpdateCmdSliceSize)||
-       !s->present_ring->allocate(*s->pd,PresentCmdSliceSize)){
+       (!present_ring_allocated && !s->present_ring->allocate(*s->pd,PresentCmdSliceSize))){
       fprintf(stderr,"[render] cmd ring alloc fail\n");return false;
     }
     s->fs.load(*s->pc,"romfs:/shaders/texture_fsh.dksh");
@@ -1788,6 +1807,7 @@ bool VideoRenderer::initialize(const char*,int w,int h){
   if (prepared_lsfg && s->blit_fs) {
     s->lsfg_texture_slot = s->vctx->allocateImageIndex();
     if (s->lsfg_texture_slot >= 0) {
+      lunar::persistentEventLog("lsfg", "stage=gpu-init begin");
       if (prepared_lsfg->initializeGpu(s->dev, 1280, 720, lsfg_error)) {
         s->lsfg = std::move(prepared_lsfg);
         lunar::persistentEventLog("lsfg", "720p session prepared");
@@ -2230,9 +2250,18 @@ void VideoRenderer::present(){
                    fb, db, s->static_state_dirty ? 1 : 0,
                    s->q && s->q.isInErrorState() ? 1 : 0);
 #if LUNARNX_LSFG
-  if (!recordLsfgFrame(*s, fb, db, advanced_to_new_frame))
+  const bool probe_lsfg = s->lsfg && !s->lsfg_failed &&
+      !s->lsfg_first_dispatch_submitted && advanced_to_new_frame &&
+      s->frame_w == 1280 && s->frame_h == 720;
+  if (probe_lsfg) lunar::persistentEventLog("lsfg", "stage=first-frame record begin");
+  const bool lsfg_presented = recordLsfgFrame(*s, fb, db, advanced_to_new_frame);
+  if (!lsfg_presented)
 #endif
     recordPresentPipeline(*s,fb,db,perf_);
+#if LUNARNX_LSFG
+  const bool first_lsfg_submit = probe_lsfg && lsfg_presented;
+  if (first_lsfg_submit) lunar::persistentEventLog("lsfg", "stage=first-frame submit begin");
+#endif
   hardwareProbeLog(frame_id, "record-pipeline-end",
                    "pipeline_passes=%zu target=%dx%d queue_error=%d",
                    s->pipeline.pass_count, s->target_w, s->target_h,
@@ -2248,6 +2277,13 @@ void VideoRenderer::present(){
                    "slice=%zu queue_error=%d", submitted_index,
                    s->q && s->q.isInErrorState() ? 1 : 0);
   const bool queue_error = s->q && s->q.isInErrorState();
+#if LUNARNX_LSFG
+  if (first_lsfg_submit) {
+    s->lsfg_first_dispatch_submitted = true;
+    lunar::persistentEventLog("lsfg", "stage=first-frame submit result=%s",
+                              queue_error ? "queue-error" : "queued");
+  }
+#endif
   s->cl=0;
   completed_frame=submitted_frame;
   s->next_submitted_frame=(submitted_index+1)%s->submitted_frames.size();
@@ -2381,6 +2417,7 @@ void VideoRenderer::shutdown(){
   s->lsfg_capture_pending = false;
   s->lsfg_last_capture_ns = 0;
   s->lsfg_failed = false;
+  s->lsfg_first_dispatch_submitted = false;
   if (s->vctx && s->lsfg_texture_slot >= 0)
     s->vctx->freeImageIndex(s->lsfg_texture_slot);
   s->lsfg_texture_slot = -1;
