@@ -17,6 +17,14 @@ def main():
     normal_start = main_source.split("#else", 1)[1].split("#endif", 1)[0]
     require("new lunar::ui::PlatformActivity()" in normal_start,
             "normal startup must open platform selection")
+    require(normal_start.index("pushActivity(platform)") < normal_start.index("platform->openStartupPage()"),
+            "direct startup must preserve the selector as the root activity")
+    require("platform->openStartupPage()" not in normal_start.split("} else {", 1)[1],
+            "limited-memory launches must keep the applet warning")
+    require("openStartupPage()" not in platform_source.split("void PlatformActivity::onResume()", 1)[1]
+            .split("void PlatformActivity::openStartupPage()", 1)[0],
+            "returning from a platform must not reapply startup navigation")
+
     require("new lunar::ui::AuthActivity()" not in normal_start,
             "Xbox auth must not be the application root")
 

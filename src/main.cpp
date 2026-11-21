@@ -103,7 +103,9 @@ int main(int argc, char* argv[]) {
 #else
     const AppletType applet_type = appletGetAppletType();
     if (hasFullApplicationResources(applet_type)) {
-        brls::Application::pushActivity(new lunar::ui::PlatformActivity());
+        auto* platform = new lunar::ui::PlatformActivity();
+        brls::Application::pushActivity(platform);
+        platform->openStartupPage();
     } else {
         lunar::diagnosticLog("main",
             "blocking limited launch mode applet_type=%d", applet_type);

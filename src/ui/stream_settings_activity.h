@@ -22,6 +22,14 @@ struct StreamSettingsSnapshot {
     int rumble_strength_percent = 50;
 };
 
+enum class StartupPage {
+    Selector,
+    PlayStation,
+    Xbox,
+};
+
+StartupPage loadStartupPage();
+
 enum class StreamSettingsScope {
     Global,
     Xbox,

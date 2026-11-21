@@ -12,6 +12,7 @@ public:
 
     brls::View* createContentView() override;
     void onResume() override;
+    void openStartupPage();
 
 private:
     std::chrono::steady_clock::time_point exit_navigation_ready_at_{};

@@ -213,6 +213,14 @@ void PlatformActivity::onResume() {
         std::chrono::milliseconds(750);
 }
 
+void PlatformActivity::openStartupPage() {
+    switch (loadStartupPage()) {
+        case StartupPage::Selector: break;
+        case StartupPage::PlayStation: openPlayStation(); break;
+        case StartupPage::Xbox: openXbox(); break;
+    }
+}
+
 void PlatformActivity::openXbox() {
     diagnosticLog("ui-platform", "Xbox navigation begin");
     auto ctrl = AuthActivity::createConfiguredController();

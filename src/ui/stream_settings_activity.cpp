@@ -169,13 +169,21 @@ bool writeConfig(cJSON* root) {
     char* json = cJSON_Print(root);
     if (!json) return false;
     FILE* output = std::fopen(lunar::get_config_path(), "wb");
-    const bool written = output != nullptr;
-    if (output) {
-        std::fputs(json, output);
-        std::fclose(output);
-    }
+    bool written = output && std::fputs(json, output) >= 0;
+    if (output) written = std::fclose(output) == 0 && written;
     std::free(json);
     return written;
+}
+
+constexpr const char* kStartupPageValues[] = {"selector", "playstation", "xbox"};
+
+bool saveStartupPage(StartupPage page) {
+    cJSON* root = readConfig();
+    cJSON_DeleteItemFromObjectCaseSensitive(root, "startup_page");
+    const bool saved = cJSON_AddStringToObject(root, "startup_page",
+        kStartupPageValues[static_cast<int>(page)]) && writeConfig(root);
+    cJSON_Delete(root);
+    return saved;
 }
 
 void saveRegion(const char* ip) {
@@ -316,6 +324,22 @@ bool saveStreamSettings(const StreamSettingsSnapshot& settings) {
     return written;
 }
 
+StartupPage loadStartupPage() {
+    cJSON* root = readConfig();
+    const auto* value = cJSON_GetObjectItemCaseSensitive(root, "startup_page");
+    StartupPage page = StartupPage::Selector;
+    if (cJSON_IsString(value) && value->valuestring) {
+        for (int index = 0; index < 3; ++index) {
+            if (std::strcmp(value->valuestring, kStartupPageValues[index]) == 0) {
+                page = static_cast<StartupPage>(index);
+                break;
+            }
+        }
+    }
+    cJSON_Delete(root);
+    return page;
+}
+
 StreamSettingsActivity::StreamSettingsActivity(
     std::shared_ptr<app::StreamController> ctrl,
     StreamSettingsSnapshot settings,
@@ -371,6 +395,19 @@ brls::View* StreamSettingsActivity::createContentView() {
             }
         });
     app_card->addView(language);
+    auto* startup = new brls::SelectorCell();
+    startup->init(brls::getStr("lunarnx/settings/startup_page"),
+        {brls::getStr("lunarnx/settings/startup_selector"),
+         brls::getStr("lunarnx/platform/ps_title"),
+         brls::getStr("lunarnx/platform/xbox_title")},
+        static_cast<int>(loadStartupPage()),
+        [](int selected) {
+            if (selected < 0 || selected > 2) return;
+            if (!saveStartupPage(static_cast<StartupPage>(selected))) {
+                brls::Application::notify(brls::getStr("lunarnx/settings/startup_save_failed"));
+            }
+        });
+    app_card->addView(startup);
     root->addView(app_card);
     }
 
