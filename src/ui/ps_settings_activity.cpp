@@ -97,6 +97,7 @@ PsSettingsSnapshot loadPsSettings() {
         out.video_codec = stream::VideoCodec::HEVC;
     }
     out.lsfg_30fps = cJSON_IsTrue(cJSON_GetObjectItem(root, "ps_lsfg_30fps"));
+    out.performance_overlay = cJSON_IsTrue(cJSON_GetObjectItem(root, "ps_performance_overlay"));
     const cJSON* vibration = cJSON_GetObjectItem(root, "ps_vibration_enabled");
     if (cJSON_IsBool(vibration)) out.vibration_enabled = cJSON_IsTrue(vibration);
     const cJSON* rumble = cJSON_GetObjectItem(root, "ps_rumble_strength_percent");
@@ -118,6 +119,8 @@ bool savePsSettings(const PsSettingsSnapshot& settings) {
                             stream::videoCodecName(settings.video_codec));
     cJSON_DeleteItemFromObject(root, "ps_lsfg_30fps");
     cJSON_AddBoolToObject(root, "ps_lsfg_30fps", settings.lsfg_30fps);
+    cJSON_DeleteItemFromObject(root, "ps_performance_overlay");
+    cJSON_AddBoolToObject(root, "ps_performance_overlay", settings.performance_overlay);
     cJSON_DeleteItemFromObject(root, "ps_vibration_enabled");
     cJSON_AddBoolToObject(root, "ps_vibration_enabled", settings.vibration_enabled);
     cJSON_DeleteItemFromObject(root, "ps_rumble_strength_percent");
@@ -158,6 +161,11 @@ brls::View* PsSettingsActivity::createContentView() {
                 ? stream::VideoCodec::HEVC : stream::VideoCodec::H264;
         });
     card->addView(codec);
+    auto* performance = new brls::BooleanCell();
+    performance->init(brls::getStr("lunarnx/ps/settings_performance_overlay"),
+        settings_.performance_overlay,
+        [this](bool enabled) { settings_.performance_overlay = enabled; });
+    card->addView(performance);
 #if LUNARNX_LSFG
     auto* lsfg = new brls::BooleanCell();
     lsfg->init(brls::getStr("lunarnx/ps/settings_lsfg"), settings_.lsfg_30fps,

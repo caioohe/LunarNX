@@ -2215,11 +2215,11 @@ void VideoRenderer::present(){
     uint64_t queued_ns=0;
     s->current_frame=dequeuePendingFrame(*s,queued_ns);
     advanced_to_new_frame=s->current_frame!=nullptr;
-#if LUNARNX_LATENCY_DIAGNOSTIC_LOG
-    const uint64_t now_ns=rendererMonotonicNowNs();
-    if(advanced_to_new_frame&&queued_ns>0&&now_ns>=queued_ns&&perf_)
-      perf_->recordRenderQueueWait((now_ns-queued_ns)/1000ULL);
-#endif
+    if (advanced_to_new_frame && queued_ns > 0 && perf_) {
+      const uint64_t wait_us = (rendererMonotonicNowNs() - queued_ns) / 1000ULL;
+      perf_->decoded_queue_wait_us.store(wait_us, std::memory_order_relaxed);
+      perf_->recordRenderQueueWait(wait_us);
+    }
   }
   setRenderStage(VideoRenderStage::MappingUpdate);
   if(!updateFrameMapping(*s,s->current_frame)){
@@ -2323,6 +2323,10 @@ void VideoRenderer::present(){
                    s->q && s->q.isInErrorState() ? 1 : 0);
   const bool queue_error = s->q && s->q.isInErrorState();
 #if LUNARNX_LSFG
+  if (perf_) {
+    perf_->lsfg_presenting.store(lsfg_presented && !queue_error,
+                                 std::memory_order_relaxed);
+  }
   if (first_lsfg_submit) {
     s->lsfg_first_dispatch_submitted = true;
     lunar::persistentEventLog("lsfg", "stage=first-frame submit result=%s",

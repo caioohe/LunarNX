@@ -86,6 +86,8 @@ struct PerfStats {
     std::atomic<uint32_t> decoded_pending_depth_high{0};
     std::atomic<uint32_t> decoded_catchup_suppressed{0};
     std::atomic<uint32_t> unique_video_frames_submitted{0};
+    std::atomic<int64_t> decoded_queue_wait_us{-1};
+    std::atomic<bool> lsfg_presenting{false};
     std::atomic<uint64_t> new_frame_submit_gap_max_us{0};
     std::atomic<int64_t> last_new_frame_submit_ns{0};
     // Monotonic timestamp of the first frame successfully submitted for this
@@ -260,6 +262,8 @@ struct PerfStats {
         decoded_pending_depth_high = 0;
         decoded_catchup_suppressed = 0;
         unique_video_frames_submitted = 0;
+        decoded_queue_wait_us = -1;
+        lsfg_presenting = false;
         new_frame_submit_gap_max_us = 0;
         last_new_frame_submit_ns = 0;
         stream_started_ns = 0;

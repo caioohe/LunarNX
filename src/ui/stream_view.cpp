@@ -241,6 +241,9 @@ private:
 
 StreamView::StreamView(std::shared_ptr<app::IStreamRuntime> runtime)
     : runtime_(std::move(runtime)) {
+    if (runtime_->getStreamPlatform() == app::StreamPlatform::PlayStation) {
+        performance_visible_ = loadPsSettings().performance_overlay;
+    }
     brls::Application::getPlatform()->disableScreenDimming(true);
     focus_subscription_ =
         brls::Application::getWindowFocusChangedEvent()->subscribe(
@@ -463,8 +466,15 @@ brls::View* StreamView::createContentView() {
         runtime_->setVideoPresentationSuspended(true);
         setQuickMenuVisible(false);
         if (runtime_->getStreamPlatform() == app::StreamPlatform::PlayStation) {
+            const auto current = loadPsSettings();
             brls::Application::pushActivity(
-                new PsSettingsActivity(loadPsSettings()),
+                new PsSettingsActivity(current, [this, alive = alive_,
+                        previous = current.performance_overlay](const PsSettingsSnapshot& settings) {
+                    if (alive->load() && settings.performance_overlay != previous) {
+                        performance_visible_ = settings.performance_overlay;
+                        updatePerformanceVisibility();
+                    }
+                }),
                 brls::TransitionAnimation::NONE);
         } else {
             brls::Application::pushActivity(
@@ -798,12 +808,15 @@ void StreamView::onResume() {
 }
 
 void StreamView::updatePerformanceVisibility() {
+    const bool is_ps = runtime_->getStreamPlatform() == app::StreamPlatform::PlayStation;
     if (overlay_) {
-        overlay_->setVisibility(performance_visible_
+        overlay_->setVisibility(performance_visible_ && !is_ps
             ? brls::Visibility::VISIBLE : brls::Visibility::GONE);
     }
     if (!performance_visible_ && perf_overlay_) {
         perf_overlay_->setVisible(false);
+    } else if (is_ps && perf_overlay_) {
+        perf_overlay_->setVisible(true);
     }
     if (performance_button_) {
         performance_button_->setText(brls::getStr(performance_visible_
