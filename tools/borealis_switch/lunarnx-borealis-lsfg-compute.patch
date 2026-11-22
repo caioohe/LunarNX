@@ -1,0 +1,46 @@
+diff --git a/library/CMakeLists.txt b/library/CMakeLists.txt
+index 74d44ec..135a721 100644
+--- a/library/CMakeLists.txt
++++ b/library/CMakeLists.txt
+@@ -330,6 +330,9 @@ message(STATUS "borealis driver ${BOREALIS_DRIVER}")
+ 
+ # borealis Library
+ add_library(borealis STATIC ${BOREALIS_SRC})
++if(PLATFORM_SWITCH AND BOREALIS_USE_DEKO3D AND LUNARNX_BOREALIS_LSFG)
++    target_compile_definitions(borealis PRIVATE LUNARNX_LSFG=1)
++endif()
+ set_target_properties(borealis PROPERTIES
+         CXX_STANDARD 20
+         UNITY_BUILD ${BRLS_UNITY_BUILD}
+diff --git a/library/include/borealis/platforms/switch/switch_video.hpp b/library/include/borealis/platforms/switch/switch_video.hpp
+index ed6e455..87aa893 100644
+--- a/library/include/borealis/platforms/switch/switch_video.hpp
++++ b/library/include/borealis/platforms/switch/switch_video.hpp
+@@ -56,6 +56,7 @@ class SwitchVideoContext : public VideoContext
+     dk::Device getDeko3dDevice();
+ 
+     dk::Queue getQueue();
++    bool hasLsfgComputeQueue() const;
+ 
+     dk::Image* getFramebuffer();
+     dk::Image* getDepthBuffer();
+diff --git a/library/lib/platforms/switch/switch_video.cpp b/library/lib/platforms/switch/switch_video.cpp
+index a594c4f..0053605 100644
+--- a/library/lib/platforms/switch/switch_video.cpp
++++ b/library/lib/platforms/switch/switch_video.cpp
+@@ -305,6 +305,15 @@ dk::Device SwitchVideoContext::getDeko3dDevice() { return device; }
+ 
+ dk::Queue SwitchVideoContext::getQueue() { return queue; }
+ 
++bool SwitchVideoContext::hasLsfgComputeQueue() const
++{
++#ifdef LUNARNX_LSFG
++    return static_cast<bool>(queue);
++#else
++    return false;
++#endif
++}
++
+ dk::Image* SwitchVideoContext::getFramebuffer()
+ {
+     return &framebuffers[imageSlot];

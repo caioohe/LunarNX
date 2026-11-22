@@ -1689,15 +1689,6 @@ bool VideoRenderer::initialize(const char*,int w,int h){
 #if LUNARNX_LSFG
   std::unique_ptr<NativeLsfg> prepared_lsfg;
   std::string lsfg_error;
-  if (lsfg_30fps_ && w == 1280 && h == 720) {
-    const char* folder = "sdmc:/switch/LunarNX/lsfg";
-    const char* dll = "sdmc:/switch/LunarNX/lsfg/Lossless.dll";
-    lunar::persistentEventLog("lsfg", "stage=shader-prepare begin");
-    prepared_lsfg = NativeLsfg::prepare(true, 4, dll, folder, lsfg_error);
-    lunar::persistentEventLog("lsfg", "stage=shader-prepare result=%s",
-                              prepared_lsfg ? "ready" : "fallback");
-    if (!prepared_lsfg) lunar::persistentEventLog("lsfg", "%s", lsfg_error.c_str());
-  }
 #endif
 
   std::unique_lock<std::recursive_mutex> gpu_lock;
@@ -1713,6 +1704,22 @@ bool VideoRenderer::initialize(const char*,int w,int h){
       lunar::diagnosticLog("render","initialize failed missing video context");
       return false;
     }
+#if LUNARNX_LSFG
+    if (lsfg_30fps_ && w == 1280 && h == 720) {
+      if (!s->vctx->hasLsfgComputeQueue()) {
+        lunar::persistentEventLog("lsfg", "stage=compute-queue result=fallback");
+      } else {
+        lunar::persistentEventLog("lsfg", "stage=compute-queue result=ready");
+        const char* folder = "sdmc:/switch/LunarNX/lsfg";
+        const char* dll = "sdmc:/switch/LunarNX/lsfg/Lossless.dll";
+        lunar::persistentEventLog("lsfg", "stage=shader-prepare begin");
+        prepared_lsfg = NativeLsfg::prepare(true, 4, dll, folder, lsfg_error);
+        lunar::persistentEventLog("lsfg", "stage=shader-prepare result=%s",
+                                  prepared_lsfg ? "ready" : "fallback");
+        if (!prepared_lsfg) lunar::persistentEventLog("lsfg", "%s", lsfg_error.c_str());
+      }
+    }
+#endif
     gpu_lock=std::unique_lock<std::recursive_mutex>(s->vctx->getGpuMutex());
     s->dev=s->vctx->getDeko3dDevice();s->q=s->vctx->getQueue();
     if(!s->dev||!s->q){

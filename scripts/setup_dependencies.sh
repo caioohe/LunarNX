@@ -67,10 +67,14 @@ else
     exit 2
 fi
 
-lsfg_patch="$project_root/tools/borealis_switch/lunarnx-borealis-lsfg.patch"
-if ! git -C "$borealis_dir" apply --reverse --check "$lsfg_patch" >/dev/null 2>&1; then
-    git -C "$borealis_dir" apply "$lsfg_patch"
-fi
+for lsfg_patch in \
+    "$project_root/tools/borealis_switch/lunarnx-borealis-lsfg.patch" \
+    "$project_root/tools/borealis_switch/lunarnx-borealis-lsfg-compute.patch"
+do
+    if ! git -C "$borealis_dir" apply --reverse --check "$lsfg_patch" >/dev/null 2>&1; then
+        git -C "$borealis_dir" apply "$lsfg_patch"
+    fi
+done
 
 clone_at_commit \
     https://github.com/sepfy/libpeer.git \

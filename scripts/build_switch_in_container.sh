@@ -68,19 +68,17 @@ case "$curl_provider" in
 esac
 
 echo "Building Borealis"
-lsfg_borealis_flags=()
-if [[ "${LSFG:-0}" == 1 ]]; then
-    lsfg_borealis_flags=(-DCMAKE_CXX_FLAGS=-DLUNARNX_LSFG=1)
-fi
 git -C "$project_root/lib/borealis" apply --reverse --check \
     "$project_root/tools/borealis_switch/lunarnx-borealis-gpu-lifecycle.patch"
 git -C "$project_root/lib/borealis" apply --reverse --check \
     "$project_root/tools/borealis_switch/lunarnx-borealis-command-buffer.patch"
+git -C "$project_root/lib/borealis" apply --reverse --check \
+    "$project_root/tools/borealis_switch/lunarnx-borealis-lsfg-compute.patch"
 rm -rf "$project_root/lib/borealis/build_switch"
 cmake -S "$project_root/lib/borealis" \
     -B "$project_root/lib/borealis/build_switch" \
     -DCMAKE_TOOLCHAIN_FILE="$DEVKITPRO/cmake/Switch.cmake" \
-    "${lsfg_borealis_flags[@]}" \
+    -DLUNARNX_BOREALIS_LSFG="$LSFG" \
     -DPLATFORM_SWITCH=ON \
     -DUSE_DEKO3D=ON \
     -DBOREALIS_USE_DEKO3D=ON \
