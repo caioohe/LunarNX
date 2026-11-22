@@ -67,7 +67,11 @@ public:
     bool startStream();
     void requestCancel();
     void setRumbleEnabled(bool enabled);
-    void setLsfg30fps(bool enabled) { lsfg_30fps_ = enabled; }
+    void setLsfg30fps(bool enabled, bool performance = true, unsigned flow_denominator = 4) {
+        lsfg_30fps_ = enabled;
+        lsfg_performance_ = performance;
+        lsfg_flow_denominator_ = flow_denominator;
+    }
     void setRumbleStrengthPercent(int percent);
     bool setPsnCredentials(std::string access_token, std::string account_id);
     std::string lastError() const;
@@ -98,6 +102,8 @@ private:
     int width_, height_, fps_, bitrate_kbps_;
     stream::VideoCodec video_codec_;
     bool lsfg_30fps_ = false;
+    bool lsfg_performance_ = true;
+    unsigned lsfg_flow_denominator_ = 4;
     stream::VideoBackend video_backend_;
 
     // Components

@@ -13,6 +13,9 @@ struct PsSettingsSnapshot {
     int bitrate_kbps = 10000;
     stream::VideoCodec video_codec = stream::VideoCodec::H264;
     bool lsfg_30fps = false;
+    bool lsfg_performance = true;
+    unsigned lsfg_flow_denominator = 4;
+    bool performance_overlay = false;
     bool vibration_enabled = true;
     int rumble_strength_percent = 50;
 };

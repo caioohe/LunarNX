@@ -23,6 +23,23 @@ PerfOverlay::PerfOverlay(const stream::PerfStats* perf, app::StreamPlatform plat
     title->setVerticalAlign(brls::VerticalAlign::CENTER);
     this->addView(title);
 
+    if (platform_ == app::StreamPlatform::PlayStation) {
+        for (auto*& row : ps_rows_) {
+            row = new brls::Label();
+            row->setHeight(21);
+            row->setFontSize(13);
+            row->setTextColor(p.text);
+            row->setHorizontalAlign(brls::HorizontalAlign::LEFT);
+            row->setVerticalAlign(brls::VerticalAlign::CENTER);
+            row->setSingleLine(true);
+            addView(row);
+        }
+#if !LUNARNX_LSFG
+        ps_rows_.back()->setVisibility(brls::Visibility::GONE);
+#endif
+        return;
+    }
+
     label_ = new brls::Label();
     label_->setFontSize(13);
     label_->setTextColor(uiPalette().text);
@@ -33,7 +50,31 @@ PerfOverlay::PerfOverlay(const stream::PerfStats* perf, app::StreamPlatform plat
 void PerfOverlay::update(float fps, const std::string& resolution,
                          const std::string& video_backend,
                          const std::string& video_codec) {
-    if (!visible_ || !label_) return;
+    if (!visible_) return;
+
+    if (platform_ == app::StreamPlatform::PlayStation) {
+        const auto rtt = perf_->ps_rtt_ms.load();
+        const auto queue_wait = perf_->decoded_queue_wait_us.load();
+        ps_rows_[0]->setText(brls::getStr("lunarnx/perf/ps_video",
+            resolution, video_codec, fps));
+        ps_rows_[1]->setText(brls::getStr("lunarnx/perf/ps_network",
+            rtt > 0 ? std::to_string(rtt) : "—",
+            perf_->ps_measured_bitrate_mbps.load(),
+            perf_->ps_packet_loss_fraction.load() * 100.0f));
+        ps_rows_[2]->setText(brls::getStr("lunarnx/perf/ps_local",
+            perf_->avg_decode_ms(),
+            queue_wait < 0 ? "—" : fmt::format("{:.1f}", queue_wait / 1000.0),
+            perf_->avg_render_submit_ms()));
+        ps_rows_[3]->setText(brls::getStr("lunarnx/perf/ps_drops",
+            perf_->ps_frames_lost.load(), perf_->decoded_pending_drop_oldest.load(),
+            perf_->decoded_catchup_suppressed.load()));
+#if LUNARNX_LSFG
+        ps_rows_[4]->setText(brls::getStr("lunarnx/perf/ps_lsfg",
+            brls::getStr(perf_->lsfg_presenting.load()
+                ? "lunarnx/perf/ps_lsfg_active" : "lunarnx/perf/ps_lsfg_original")));
+#endif
+        return;
+    }
 
     uint32_t video = perf_->video_frames.load();
     uint32_t audio = perf_->audio_frames.load();

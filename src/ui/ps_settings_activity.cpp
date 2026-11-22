@@ -97,6 +97,12 @@ PsSettingsSnapshot loadPsSettings() {
         out.video_codec = stream::VideoCodec::HEVC;
     }
     out.lsfg_30fps = cJSON_IsTrue(cJSON_GetObjectItem(root, "ps_lsfg_30fps"));
+    const cJSON* lsfg_performance = cJSON_GetObjectItem(root, "ps_lsfg_performance");
+    if (cJSON_IsBool(lsfg_performance)) out.lsfg_performance = cJSON_IsTrue(lsfg_performance);
+    const cJSON* lsfg_flow = cJSON_GetObjectItem(root, "ps_lsfg_flow_denominator");
+    if (cJSON_IsNumber(lsfg_flow) && lsfg_flow->valuedouble == 2.0)
+        out.lsfg_flow_denominator = 2;
+    out.performance_overlay = cJSON_IsTrue(cJSON_GetObjectItem(root, "ps_performance_overlay"));
     const cJSON* vibration = cJSON_GetObjectItem(root, "ps_vibration_enabled");
     if (cJSON_IsBool(vibration)) out.vibration_enabled = cJSON_IsTrue(vibration);
     const cJSON* rumble = cJSON_GetObjectItem(root, "ps_rumble_strength_percent");
@@ -118,6 +124,12 @@ bool savePsSettings(const PsSettingsSnapshot& settings) {
                             stream::videoCodecName(settings.video_codec));
     cJSON_DeleteItemFromObject(root, "ps_lsfg_30fps");
     cJSON_AddBoolToObject(root, "ps_lsfg_30fps", settings.lsfg_30fps);
+    cJSON_DeleteItemFromObject(root, "ps_lsfg_performance");
+    cJSON_AddBoolToObject(root, "ps_lsfg_performance", settings.lsfg_performance);
+    cJSON_DeleteItemFromObject(root, "ps_lsfg_flow_denominator");
+    cJSON_AddNumberToObject(root, "ps_lsfg_flow_denominator", settings.lsfg_flow_denominator);
+    cJSON_DeleteItemFromObject(root, "ps_performance_overlay");
+    cJSON_AddBoolToObject(root, "ps_performance_overlay", settings.performance_overlay);
     cJSON_DeleteItemFromObject(root, "ps_vibration_enabled");
     cJSON_AddBoolToObject(root, "ps_vibration_enabled", settings.vibration_enabled);
     cJSON_DeleteItemFromObject(root, "ps_rumble_strength_percent");
@@ -158,18 +170,42 @@ brls::View* PsSettingsActivity::createContentView() {
                 ? stream::VideoCodec::HEVC : stream::VideoCodec::H264;
         });
     card->addView(codec);
+    auto* performance = new brls::BooleanCell();
+    performance->init(brls::getStr("lunarnx/ps/settings_performance_overlay"),
+        settings_.performance_overlay,
+        [this](bool enabled) { settings_.performance_overlay = enabled; });
+    card->addView(performance);
 #if LUNARNX_LSFG
+    auto* lsfg_options = new brls::Box(brls::Axis::COLUMN);
+    auto* lsfg_mode = new brls::SelectorCell();
+    lsfg_mode->init(brls::getStr("lunarnx/ps/settings_lsfg_mode"),
+        {brls::getStr("lunarnx/ps/settings_lsfg_performance"),
+         brls::getStr("lunarnx/ps/settings_lsfg_quality")},
+        settings_.lsfg_performance ? 0 : 1,
+        [this](int selected) { settings_.lsfg_performance = selected == 0; });
+    lsfg_options->addView(lsfg_mode);
+    auto* lsfg_flow = new brls::SelectorCell();
+    lsfg_flow->init(brls::getStr("lunarnx/ps/settings_lsfg_flow"),
+        {"25%", "50%"}, settings_.lsfg_flow_denominator == 2 ? 1 : 0,
+        [this](int selected) { settings_.lsfg_flow_denominator = selected == 1 ? 2 : 4; });
+    lsfg_options->addView(lsfg_flow);
+    lsfg_options->addView(makeMutedLabel(brls::getStr("lunarnx/ps/settings_lsfg_reconnect"), 13));
+    lsfg_options->setVisibility(settings_.lsfg_30fps
+        ? brls::Visibility::VISIBLE : brls::Visibility::GONE);
     auto* lsfg = new brls::BooleanCell();
     lsfg->init(brls::getStr("lunarnx/ps/settings_lsfg"), settings_.lsfg_30fps,
-        [this, lsfg](bool enabled) {
+        [this, lsfg, lsfg_options](bool enabled) {
             if (saveLsfgSetting(enabled)) {
                 settings_.lsfg_30fps = enabled;
+                lsfg_options->setVisibility(enabled
+                    ? brls::Visibility::VISIBLE : brls::Visibility::GONE);
                 return;
             }
             lsfg->setOn(settings_.lsfg_30fps, false);
             brls::Application::notify(brls::getStr("lunarnx/ps/settings_save_failed"));
         });
     card->addView(lsfg);
+    card->addView(lsfg_options);
     card->addView(makeMutedLabel(brls::getStr("lunarnx/ps/settings_lsfg_hint"), 13));
 #endif
     root->addView(card);

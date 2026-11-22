@@ -3,6 +3,7 @@
 #include <borealis.hpp>
 #include "../app/stream_runtime.h"
 #include "../stream/perf_stats.h"
+#include <array>
 #include <string>
 
 namespace lunar::ui {
@@ -20,7 +21,8 @@ public:
     bool isVisible() const { return visible_; }
 
 private:
-    brls::Label* label_;
+    brls::Label* label_ = nullptr;
+    std::array<brls::Label*, 5> ps_rows_{};
     const stream::PerfStats* perf_;
     app::StreamPlatform platform_ = app::StreamPlatform::Xbox;
     bool visible_ = false;
