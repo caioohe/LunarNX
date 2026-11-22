@@ -560,7 +560,6 @@ struct Deko3DRenderContext {
   const dk::Image* lsfg_last_original = nullptr;
   bool lsfg_show_original_next = false;
   bool lsfg_capture_pending = false;
-  bool lsfg_cadence = false;
   uint64_t lsfg_last_capture_ns = 0;
   bool lsfg_failed = false;
   bool lsfg_first_dispatch_submitted = false;
@@ -1208,12 +1207,9 @@ bool recordLsfgFrame(Deko3DRenderContext& s, dk::Image* fb, dk::Image* db,
                      bool new_frame) {
   if (!s.lsfg || s.lsfg_failed) return false;
   refreshTargetSize(s);
-  if (!s.lsfg_cadence || s.frame_w != 1280 || s.frame_h != 720 ||
+  if (s.frame_w != 1280 || s.frame_h != 720 ||
       s.target_w * 9 != s.target_h * 16) {
-    if (s.lsfg_last_capture_ns) {
-      s.lsfg->reset();
-      lunar::persistentEventLog("lsfg", "auto=original");
-    }
+    if (s.lsfg_last_capture_ns) s.lsfg->reset();
     s.lsfg_last_original = nullptr;
     s.lsfg_show_original_next = false;
     s.lsfg_capture_pending = false;
@@ -1233,8 +1229,6 @@ bool recordLsfgFrame(Deko3DRenderContext& s, dk::Image* fb, dk::Image* db,
     const auto now = rendererMonotonicNowNs();
     if (s.lsfg_last_capture_ns && now - s.lsfg_last_capture_ns > 90000000ULL)
       s.lsfg->reset();
-    if (!s.lsfg_last_capture_ns)
-      lunar::persistentEventLog("lsfg", "auto=interpolate");
     s.lsfg_last_capture_ns = now;
     const auto& input = *s.lsfg->input();
     recordRenderTargetState(s, input, 1280, 720);
@@ -2033,9 +2027,6 @@ bool VideoRenderer::render(const VideoFrame&frame){
   if(s->resolution_transition_frame)
     av_frame_free(&s->resolution_transition_frame);
   s->resolution_transition_frame_queued_ns=0;
-#if LUNARNX_LSFG
-  s->lsfg_cadence = frame.lsfg_cadence;
-#endif
   enqueuePendingFrame(*s,keep);
   if(shouldLogRender())lunar::diagnosticLog("render","render queued width=%d height=%d",f->width,f->height);
   return true;

@@ -9,8 +9,6 @@
 #include "video_renderer.h"
 #include "video_sync_policy.h"
 #include <algorithm>
-#include <array>
-#include <cstdlib>
 #include <atomic>
 #include <chrono>
 #include <cstdio>
@@ -18,12 +16,6 @@
 
 #ifdef __SWITCH__
 #include <borealis.hpp>
-#if LUNARNX_LSFG
-extern "C" {
-#include <libavutil/frame.h>
-#include <libavutil/hwcontext.h>
-}
-#endif
 #endif
 
 namespace lunar::stream {
@@ -47,107 +39,6 @@ uint64_t monotonicNowNs() {
         std::chrono::nanoseconds>(
             std::chrono::steady_clock::now().time_since_epoch()).count());
 }
-
-#if defined(__SWITCH__) && LUNARNX_LSFG
-struct LsfgCadence {
-    static constexpr unsigned sample_count = 48;
-    static constexpr int columns = 48;
-    static constexpr int rows = 27;
-    std::array<uint8_t, columns * rows> previous{};
-    int width = 0, height = 0;
-    bool have_previous = false;
-    int previous_class = -1;
-    unsigned sampled = 0, cooldown = 0;
-    unsigned near = 0, distinct = 0, alternating = 0;
-    uint64_t last_frame_ns = 0;
-    bool active = false;
-
-    bool observe(const VideoFrame& frame) {
-        const uint64_t now = monotonicNowNs();
-        if (frame.width != 1280 || frame.height != 720 ||
-            (last_frame_ns && now - last_frame_ns > 100'000'000)) {
-            active = false;
-            resetWindow();
-            cooldown = 0;
-        }
-        last_frame_ns = now;
-        if (frame.width != 1280 || frame.height != 720) return false;
-        if (cooldown) {
-            --cooldown;
-            return active;
-        }
-        AVFrame* copy = nullptr;
-        const uint8_t* luma = frame.data[0];
-        int stride = frame.linesize[0];
-        if (frame.format == AV_PIX_FMT_NVTEGRA && frame.avframe) {
-            copy = av_frame_alloc();
-            if (copy && av_hwframe_transfer_data(copy, frame.avframe, 0) >= 0) {
-                luma = copy->data[0];
-                stride = copy->linesize[0];
-            }
-        }
-        if (luma && frame.width > 0 && frame.height > 0 && stride >= frame.width &&
-            (frame.format == AV_PIX_FMT_NVTEGRA || frame.format == AV_PIX_FMT_NV12 ||
-             frame.format == AV_PIX_FMT_YUV420P || frame.format == AV_PIX_FMT_YUVJ420P)) {
-            compare(luma, stride, frame.width, frame.height);
-        } else {
-            have_previous = false;
-            previous_class = -1;
-        }
-        av_frame_free(&copy);
-
-        if (++sampled == sample_count) {
-            active = near >= 15 && distinct >= 15 && alternating >= 31;
-            resetWindow();
-            cooldown = 72;
-        }
-        return active;
-    }
-
-    void resetWindow() {
-        sampled = near = distinct = alternating = 0;
-        have_previous = false;
-        previous_class = -1;
-    }
-
-    void compare(const uint8_t* luma, int stride, int w, int h) {
-        const bool comparable = have_previous && width == w && height == h;
-        unsigned total = 0, changed = 0, strongly_changed = 0;
-        for (int y = 0; y < rows; ++y) {
-            const auto* row = luma + static_cast<size_t>((2 * y + 1) * h / (2 * rows)) * stride;
-            for (int x = 0; x < columns; ++x) {
-                auto& prior = previous[y * columns + x];
-                const auto value = row[(2 * x + 1) * w / (2 * columns)];
-                const auto diff = std::abs(int(value) - int(prior));
-                total += diff;
-                changed += diff >= 6;
-                strongly_changed += diff >= 20;
-                prior = value;
-            }
-        }
-        width = w;
-        height = h;
-        have_previous = true;
-        if (!comparable) {
-            previous_class = -1;
-            return;
-        }
-        // Leave ambiguous comparisons unclassified while calibrating against PS5 footage.
-        int current_class = -1;
-        if (total <= previous.size() && changed <= 12 && strongly_changed <= 2) {
-            ++near;
-            current_class = 0;
-        } else if (total >= 3 * previous.size() || changed >= 65 || strongly_changed >= 13) {
-            ++distinct;
-            current_class = 1;
-        }
-        if (current_class >= 0 && previous_class >= 0 && current_class != previous_class) {
-            ++alternating;
-        }
-        previous_class = current_class;
-    }
-};
-#endif
 
 bool shouldLogMediaQueue() {
     return g_media_queue_logs.fetch_add(1) < kMediaQueueLogLimit;
@@ -269,23 +160,9 @@ bool MediaPipeline::initialize(int width, int height, PerfStats* perf,
             return false;
         }
         lunar::diagnosticLog("media", "video decoder init done");
-#if defined(__SWITCH__) && LUNARNX_LSFG
-        if (options.lsfg_30fps && options.video_path == VideoPipelinePath::PlayStation &&
-            options.video_backend == VideoBackend::HardwareZeroCopy) {
-            video_decoder_->setCallback(
-                [this, generation, cadence = LsfgCadence{}](const VideoFrame& frame) mutable {
-                    if (!isGenerationActive(generation)) return;
-                    auto classified = frame;
-                    classified.lsfg_cadence = cadence.observe(frame);
-                    handleVideoFrame(classified, generation);
-                });
-        } else
-#endif
-        {
-            video_decoder_->setCallback([this, generation](const VideoFrame& frame) {
-                handleVideoFrame(frame, generation);
-            });
-        }
+        video_decoder_->setCallback([this, generation](const VideoFrame& frame) {
+            handleVideoFrame(frame, generation);
+        });
         lunar::diagnosticLog("media", "video decoder callback set generation=%u",
                              generation);
 
