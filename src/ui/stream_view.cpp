@@ -349,9 +349,12 @@ brls::View* StreamView::createContentView() {
     auto stop_handler = [this](brls::View*) -> bool {
         if (!isExitComboPressed()) return false;
         auto now = std::chrono::steady_clock::now();
+        const auto since_last_press = now - exit_press_time_;
+        // Borealis can dispatch both button actions for one physical chord.
+        if (exit_pending_.load() && since_last_press < std::chrono::milliseconds(100))
+            return true;
         const bool confirmed = exit_pending_.load() &&
-            std::chrono::duration_cast<std::chrono::seconds>(
-                now - exit_press_time_).count() < 3;
+            since_last_press < kQuickDisconnectConfirmWindow;
         exit_pending_ = true;
         updateInputOwnership();
         if (confirmed) {

@@ -2443,6 +2443,25 @@ void VideoRenderer::shutdown(){
   phase_started=RenderClock::now();
   lunar::persistentEventLog(
       "video-render","shutdown phase=queue-idle begin present=%d",s->q?1:0);
+#if LUNARNX_LSFG
+  if (s->q && s->lsfg) {
+    bool idle = false;
+    if (!s->q.isInErrorState()) {
+      dk::Fence fence;
+      s->q.signalFence(fence, true);
+      s->q.flush();
+      idle = fence.wait(750'000'000) == DkResult_Success && !s->q.isInErrorState();
+    }
+    if (!idle) {
+      // Keep shader code and image memory alive if compute may still reference it.
+      lunar::persistentEventLog("video-render",
+          "shutdown phase=lsfg-fence action=retain-unsafe-context queue_error=%d",
+          s->q.isInErrorState() ? 1 : 0);
+      ctx_ = nullptr;
+      return;
+    }
+  } else
+#endif
   if(s->q)s->q.waitIdle();
   lunar::persistentEventLog(
       "video-render","shutdown phase=queue-idle done elapsed_ms=%lld",
