@@ -553,12 +553,14 @@ struct Deko3DRenderContext {
   std::optional<BoundedCmdMemRing<brls::FRAMEBUFFERS_COUNT>> update_ring;
   std::optional<BoundedCmdMemRing<brls::FRAMEBUFFERS_COUNT>> present_ring;
   RenderTarget source_target;
+  RenderTarget transition_image;
 #if LUNARNX_LSFG
   std::unique_ptr<NativeLsfg> lsfg;
   int lsfg_texture_slot = -1;
   const dk::Image* lsfg_last_original = nullptr;
   bool lsfg_show_original_next = false;
   bool lsfg_capture_pending = false;
+  bool lsfg_cadence = false;
   uint64_t lsfg_last_capture_ns = 0;
   bool lsfg_failed = false;
   bool lsfg_first_dispatch_submitted = false;
@@ -1136,6 +1138,32 @@ void recordPostProcessBlitPass(Deko3DRenderContext& s,
   s.present_cb.draw(DkPrimitive_Quads,kQuadVertices.size(),1,0,0);
 }
 
+// The swapchain clears every acquired framebuffer. Preserve the last decoded
+// image in an independent texture while the NVDEC mappings are being retired.
+bool updateFrameMapping(Deko3DRenderContext& s, AVFrame* frame);
+
+void drawDecoderDrainFrame(Deko3DRenderContext& s, bool first_slice) {
+  if (first_slice) {
+    s.transition_image.descriptor_current = false;
+    if (!s.current_frame || !s.blit_fs || !updateFrameMapping(s, s.current_frame)) return;
+    if (s.transition_image.texture_slot < 0)
+      s.transition_image.texture_slot = s.vctx->allocateImageIndex();
+    if (!ensurePostProcessTarget(s, s.transition_image, s.frame_w, s.frame_h,
+                                 "resolution-transition")) return;
+    recordRenderTargetState(s, s.transition_image);
+    recordNv12ToFramebufferPass(s, fullFrameTransform(s.frame_w, s.frame_h,
+                                                     s.color_space, s.color_full));
+    s.present_cb.barrier(DkBarrier_Full, DkInvalidateFlags_Image);
+  }
+  if (!s.transition_image.descriptor_current) return;
+  auto* framebuffer = s.vctx->getFramebuffer();
+  auto* depth = s.vctx->getDepthBuffer();
+  if (!framebuffer || !depth) return;
+  refreshTargetSize(s);
+  recordFramebufferState(s, framebuffer, depth);
+  recordPostProcessBlitPass(s, s.transition_image.texture_slot, false);
+}
+
 void updateEasuUniform(Deko3DRenderContext& s) {
   EasuConstants constants = {};
   populateEasuConstants(constants,
@@ -1180,9 +1208,12 @@ bool recordLsfgFrame(Deko3DRenderContext& s, dk::Image* fb, dk::Image* db,
                      bool new_frame) {
   if (!s.lsfg || s.lsfg_failed) return false;
   refreshTargetSize(s);
-  if (s.frame_w != 1280 || s.frame_h != 720 ||
+  if (!s.lsfg_cadence || s.frame_w != 1280 || s.frame_h != 720 ||
       s.target_w * 9 != s.target_h * 16) {
-    s.lsfg->reset();
+    if (s.lsfg_last_capture_ns) {
+      s.lsfg->reset();
+      lunar::persistentEventLog("lsfg", "auto=original");
+    }
     s.lsfg_last_original = nullptr;
     s.lsfg_show_original_next = false;
     s.lsfg_capture_pending = false;
@@ -1202,6 +1233,8 @@ bool recordLsfgFrame(Deko3DRenderContext& s, dk::Image* fb, dk::Image* db,
     const auto now = rendererMonotonicNowNs();
     if (s.lsfg_last_capture_ns && now - s.lsfg_last_capture_ns > 90000000ULL)
       s.lsfg->reset();
+    if (!s.lsfg_last_capture_ns)
+      lunar::persistentEventLog("lsfg", "auto=interpolate");
     s.lsfg_last_capture_ns = now;
     const auto& input = *s.lsfg->input();
     recordRenderTargetState(s, input, 1280, 720);
@@ -1219,7 +1252,7 @@ bool recordLsfgFrame(Deko3DRenderContext& s, dk::Image* fb, dk::Image* db,
     }
     output = generated ? generated : original;
     s.lsfg_last_original = original;
-    s.lsfg_show_original_next = true;
+    s.lsfg_show_original_next = generated != nullptr;
   }
 
   if (!output) return false;
@@ -2000,6 +2033,9 @@ bool VideoRenderer::render(const VideoFrame&frame){
   if(s->resolution_transition_frame)
     av_frame_free(&s->resolution_transition_frame);
   s->resolution_transition_frame_queued_ns=0;
+#if LUNARNX_LSFG
+  s->lsfg_cadence = frame.lsfg_cadence;
+#endif
   enqueuePendingFrame(*s,keep);
   if(shouldLogRender())lunar::diagnosticLog("render","render queued width=%d height=%d",f->width,f->height);
   return true;
@@ -2043,6 +2079,7 @@ void VideoRenderer::present(){
     retireCompletedTargets(*s,submitted_index);
     auto*& completed_frame=s->submitted_frames[submitted_index];
     if(completed_frame)av_frame_free(&completed_frame);
+    drawDecoderDrainFrame(*s, s->decoder_reset_drain_steps == 0);
     const DkCmdList reset_list=s->present_ring->end(s->present_cb);
     setRenderStage(VideoRenderStage::SubmitCommands);
     s->q.submitCommands(reset_list);
@@ -2108,6 +2145,7 @@ void VideoRenderer::present(){
     retireCompletedTargets(*s,submitted_index);
     auto*& completed_frame=s->submitted_frames[submitted_index];
     if(completed_frame)av_frame_free(&completed_frame);
+    drawDecoderDrainFrame(*s, s->resolution_transition_drain_steps == 0);
     const DkCmdList transition_list=s->present_ring->end(s->present_cb);
     setRenderStage(VideoRenderStage::SubmitCommands);
     s->q.submitCommands(transition_list);
@@ -2405,6 +2443,25 @@ void VideoRenderer::shutdown(){
   phase_started=RenderClock::now();
   lunar::persistentEventLog(
       "video-render","shutdown phase=queue-idle begin present=%d",s->q?1:0);
+#if LUNARNX_LSFG
+  if (s->q && s->lsfg) {
+    bool idle = false;
+    if (!s->q.isInErrorState()) {
+      dk::Fence fence;
+      s->q.signalFence(fence, true);
+      s->q.flush();
+      idle = fence.wait(750'000'000) == DkResult_Success && !s->q.isInErrorState();
+    }
+    if (!idle) {
+      // Keep shader code and image memory alive if compute may still reference it.
+      lunar::persistentEventLog("video-render",
+          "shutdown phase=lsfg-fence action=retain-unsafe-context queue_error=%d",
+          s->q.isInErrorState() ? 1 : 0);
+      ctx_ = nullptr;
+      return;
+    }
+  } else
+#endif
   if(s->q)s->q.waitIdle();
   lunar::persistentEventLog(
       "video-render","shutdown phase=queue-idle done elapsed_ms=%lld",
@@ -2417,6 +2474,10 @@ void VideoRenderer::shutdown(){
   releaseRetainedFrames(*s);
   s->resolution_transition.reset();
   destroyPostProcessTargets(*s);
+  resetRenderTarget(s->transition_image);
+  if (s->vctx && s->transition_image.texture_slot >= 0)
+    s->vctx->freeImageIndex(s->transition_image.texture_slot);
+  s->transition_image.texture_slot = -1;
 #if LUNARNX_LSFG
   s->lsfg.reset();
   s->lsfg_last_original = nullptr;
