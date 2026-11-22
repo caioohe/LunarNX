@@ -1740,7 +1740,8 @@ bool VideoRenderer::initialize(const char*,int w,int h){
         const char* folder = "sdmc:/switch/LunarNX/lsfg";
         const char* dll = "sdmc:/switch/LunarNX/lsfg/Lossless.dll";
         lunar::persistentEventLog("lsfg", "stage=shader-prepare begin");
-        prepared_lsfg = NativeLsfg::prepare(true, 4, dll, folder, lsfg_error);
+        prepared_lsfg = NativeLsfg::prepare(lsfg_performance_, lsfg_flow_denominator_,
+                                            dll, folder, lsfg_error);
         lunar::persistentEventLog("lsfg", "stage=shader-prepare result=%s",
                                   prepared_lsfg ? "ready" : "fallback");
         if (!prepared_lsfg) lunar::persistentEventLog("lsfg", "%s", lsfg_error.c_str());

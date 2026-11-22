@@ -133,6 +133,8 @@ inline bool usesZeroCopyRender(VideoBackend backend) {
 
 struct MediaPipelineOptions {
     bool lsfg_30fps = false;
+    bool lsfg_performance = true;
+    unsigned lsfg_flow_denominator = 4;
     VideoPipelinePath video_path = VideoPipelinePath::Xbox;
     VideoCodec video_codec = VideoCodec::H264;
     VideoBackend video_backend = VideoBackend::HardwareZeroCopy;

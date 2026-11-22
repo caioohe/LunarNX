@@ -1295,7 +1295,8 @@ void PsActivity::connectToConsole(const ps::PsConsole& host) {
         plan, ps_manager_->getPsnAccessToken(), ps_manager_->getPsnAccountId(),
         settings.width, settings.height, 60, settings.bitrate_kbps,
         settings.video_codec);
-    controller->setLsfg30fps(settings.lsfg_30fps);
+    controller->setLsfg30fps(settings.lsfg_30fps, settings.lsfg_performance,
+                             settings.lsfg_flow_denominator);
     controller->setRumbleEnabled(settings.vibration_enabled);
     controller->setRumbleStrengthPercent(settings.rumble_strength_percent);
     diagnosticLog("ui-ps", "pushing PsConnectActivity");

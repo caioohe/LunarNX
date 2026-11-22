@@ -437,6 +437,8 @@ bool PsStreamController::startStream() {
     stream::MediaPipelineOptions media_opts;
     media_opts.video_path = stream::VideoPipelinePath::PlayStation;
     media_opts.lsfg_30fps = lsfg_30fps_;
+    media_opts.lsfg_performance = lsfg_performance_;
+    media_opts.lsfg_flow_denominator = lsfg_flow_denominator_;
     media_opts.video_codec = video_codec_;
     media_opts.hold_non_target_startup_frames = true;
     media_opts.video_presentation_mode = stream::VideoPresentationMode::RealtimeLatest;
