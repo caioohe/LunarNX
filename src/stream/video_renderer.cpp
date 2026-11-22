@@ -1142,8 +1142,8 @@ void recordPostProcessBlitPass(Deko3DRenderContext& s,
 // image in an independent texture while the NVDEC mappings are being retired.
 bool updateFrameMapping(Deko3DRenderContext& s, AVFrame* frame);
 
-void drawResolutionTransition(Deko3DRenderContext& s) {
-  if (s.resolution_transition_drain_steps == 0) {
+void drawDecoderDrainFrame(Deko3DRenderContext& s, bool first_slice) {
+  if (first_slice) {
     s.transition_image.descriptor_current = false;
     if (!s.current_frame || !s.blit_fs || !updateFrameMapping(s, s.current_frame)) return;
     if (s.transition_image.texture_slot < 0)
@@ -2079,6 +2079,7 @@ void VideoRenderer::present(){
     retireCompletedTargets(*s,submitted_index);
     auto*& completed_frame=s->submitted_frames[submitted_index];
     if(completed_frame)av_frame_free(&completed_frame);
+    drawDecoderDrainFrame(*s, s->decoder_reset_drain_steps == 0);
     const DkCmdList reset_list=s->present_ring->end(s->present_cb);
     setRenderStage(VideoRenderStage::SubmitCommands);
     s->q.submitCommands(reset_list);
@@ -2144,7 +2145,7 @@ void VideoRenderer::present(){
     retireCompletedTargets(*s,submitted_index);
     auto*& completed_frame=s->submitted_frames[submitted_index];
     if(completed_frame)av_frame_free(&completed_frame);
-    drawResolutionTransition(*s);
+    drawDecoderDrainFrame(*s, s->resolution_transition_drain_steps == 0);
     const DkCmdList transition_list=s->present_ring->end(s->present_cb);
     setRenderStage(VideoRenderStage::SubmitCommands);
     s->q.submitCommands(transition_list);
