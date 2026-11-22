@@ -34,6 +34,26 @@ bool PsMediaBridge::onVideoSample(uint8_t* data, size_t size, int32_t frames_los
             size, frames_lost, recovered ? 1 : 0, media_ready_ ? 1 : 0);
     }
 
+    if (media_ready_ && data && size > 0) {
+        const auto now_ns = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now().time_since_epoch()).count());
+        if (!cadence_window_start_ns_) cadence_window_start_ns_ = now_ns;
+        ++cadence_samples_;
+        cadence_lost_ += std::max(frames_lost, 0);
+        cadence_recovered_ += recovered;
+        const auto elapsed_ns = now_ns - cadence_window_start_ns_;
+        if (elapsed_ns >= 2'000'000'000ULL) {
+            lunar::persistentEventLog(
+                "ps-cadence",
+                "arrival_ms=%llu samples=%u lost=%u recovered=%u nominal_fps=%d",
+                static_cast<unsigned long long>(elapsed_ns / 1'000'000),
+                cadence_samples_, cadence_lost_, cadence_recovered_, fps_);
+            cadence_window_start_ns_ = now_ns;
+            cadence_samples_ = cadence_lost_ = cadence_recovered_ = 0;
+        }
+    }
+
     // Calculate PTS
     if (video_frame_count_ == 0) {
         next_video_pts_ns_.store(0);
@@ -78,7 +98,6 @@ bool PsMediaBridge::onVideoSample(uint8_t* data, size_t size, int32_t frames_los
         static_cast<uint32_t>(std::max(frames_lost, 0)));
     // Copy data - chiaki reuses the buffer after callback returns
     const bool queued = media_.decodeVideoPacket(data, size, pts);
-    (void)recovered;
     return queued;
 }
 
