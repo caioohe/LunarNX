@@ -69,6 +69,9 @@ private:
     size_t pending_video_bytes_ = 0;
     bool first_video_sample_logged_ = false;
 
+    uint64_t cadence_window_start_ns_ = 0;
+    unsigned cadence_samples_ = 0, cadence_lost_ = 0, cadence_recovered_ = 0;
+
     // Video PTS tracking
     uint64_t video_frame_count_ = 0;
     std::atomic<uint64_t> next_video_pts_ns_{0};

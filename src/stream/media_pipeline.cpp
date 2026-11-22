@@ -9,6 +9,8 @@
 #include "video_renderer.h"
 #include "video_sync_policy.h"
 #include <algorithm>
+#include <array>
+#include <cstdlib>
 #include <atomic>
 #include <chrono>
 #include <cstdio>
@@ -16,6 +18,10 @@
 
 #ifdef __SWITCH__
 #include <borealis.hpp>
+extern "C" {
+#include <libavutil/frame.h>
+#include <libavutil/hwcontext.h>
+}
 #endif
 
 namespace lunar::stream {
@@ -39,6 +45,116 @@ uint64_t monotonicNowNs() {
         std::chrono::nanoseconds>(
             std::chrono::steady_clock::now().time_since_epoch()).count());
 }
+
+#ifdef __SWITCH__
+// Diagnostic only. Keep readback out of the renderer and record only aggregates.
+struct PsCadenceProbe {
+    static constexpr int columns = 48;
+    static constexpr int rows = 27;
+    std::array<uint8_t, columns * rows> previous{};
+    int width = 0, height = 0;
+    bool have_previous = false;
+    int previous_class = -1;
+    uint64_t previous_pts = 0, window_start = 0;
+    unsigned frames = 0, compared = 0, unavailable = 0;
+    unsigned near = 0, distinct = 0, alternating = 0;
+    unsigned pts_16ms = 0, pts_33ms = 0, pts_other = 0;
+    uint64_t probe_ns = 0, max_probe_ns = 0;
+
+    void observe(const VideoFrame& frame) {
+        const uint64_t start = monotonicNowNs();
+        if (!window_start) window_start = start;
+        ++frames;
+        if (previous_pts && frame.timestamp > previous_pts) {
+            const auto delta = frame.timestamp - previous_pts;
+            if (delta >= 13'000'000 && delta <= 20'000'000) ++pts_16ms;
+            else if (delta >= 28'000'000 && delta <= 39'000'000) ++pts_33ms;
+            else ++pts_other;
+        } else if (previous_pts) {
+            ++pts_other;
+        }
+        previous_pts = frame.timestamp;
+
+        AVFrame* copy = nullptr;
+        const uint8_t* luma = frame.data[0];
+        int stride = frame.linesize[0];
+        if (frame.format == AV_PIX_FMT_NVTEGRA && frame.avframe) {
+            copy = av_frame_alloc();
+            if (copy && av_hwframe_transfer_data(copy, frame.avframe, 0) >= 0) {
+                luma = copy->data[0];
+                stride = copy->linesize[0];
+            }
+        }
+        if (luma && frame.width > 0 && frame.height > 0 && stride >= frame.width &&
+            (frame.format == AV_PIX_FMT_NVTEGRA || frame.format == AV_PIX_FMT_NV12 ||
+             frame.format == AV_PIX_FMT_YUV420P || frame.format == AV_PIX_FMT_YUVJ420P)) {
+            compare(luma, stride, frame.width, frame.height);
+        } else {
+            ++unavailable;
+            have_previous = false;
+            previous_class = -1;
+        }
+        av_frame_free(&copy);
+
+        const uint64_t cost = monotonicNowNs() - start;
+        probe_ns += cost;
+        max_probe_ns = std::max(max_probe_ns, cost);
+        if (frames >= 120) {
+            lunar::persistentEventLog(
+                "ps-cadence",
+                "window_ms=%llu frames=%u pts16=%u pts33=%u pts_other=%u "
+                "compared=%u near=%u distinct=%u alternating=%u unavailable=%u "
+                "probe_avg_us=%llu probe_max_us=%llu",
+                static_cast<unsigned long long>((start - window_start) / 1'000'000),
+                frames, pts_16ms, pts_33ms, pts_other, compared, near, distinct,
+                alternating, unavailable,
+                static_cast<unsigned long long>(probe_ns / frames / 1000),
+                static_cast<unsigned long long>(max_probe_ns / 1000));
+            frames = compared = unavailable = near = distinct = alternating = 0;
+            pts_16ms = pts_33ms = pts_other = 0;
+            probe_ns = max_probe_ns = window_start = 0;
+        }
+    }
+
+    void compare(const uint8_t* luma, int stride, int w, int h) {
+        const bool comparable = have_previous && width == w && height == h;
+        unsigned total = 0, changed = 0, strongly_changed = 0;
+        for (int y = 0; y < rows; ++y) {
+            const auto* row = luma + static_cast<size_t>((2 * y + 1) * h / (2 * rows)) * stride;
+            for (int x = 0; x < columns; ++x) {
+                auto& prior = previous[y * columns + x];
+                const auto value = row[(2 * x + 1) * w / (2 * columns)];
+                const auto diff = std::abs(int(value) - int(prior));
+                total += diff;
+                changed += diff >= 6;
+                strongly_changed += diff >= 20;
+                prior = value;
+            }
+        }
+        width = w;
+        height = h;
+        have_previous = true;
+        if (!comparable) {
+            previous_class = -1;
+            return;
+        }
+        ++compared;
+        // Leave ambiguous comparisons unclassified while calibrating against PS5 footage.
+        int current_class = -1;
+        if (total <= previous.size() && changed <= 12 && strongly_changed <= 2) {
+            ++near;
+            current_class = 0;
+        } else if (total >= 3 * previous.size() || changed >= 65 || strongly_changed >= 13) {
+            ++distinct;
+            current_class = 1;
+        }
+        if (current_class >= 0 && previous_class >= 0 && current_class != previous_class) {
+            ++alternating;
+        }
+        previous_class = current_class;
+    }
+};
+#endif
 
 bool shouldLogMediaQueue() {
     return g_media_queue_logs.fetch_add(1) < kMediaQueueLogLimit;
@@ -160,9 +276,18 @@ bool MediaPipeline::initialize(int width, int height, PerfStats* perf,
             return false;
         }
         lunar::diagnosticLog("media", "video decoder init done");
+#ifdef __SWITCH__
+        const bool probe_cadence = options.video_path == VideoPipelinePath::PlayStation;
+        video_decoder_->setCallback(
+            [this, generation, probe_cadence, probe = PsCadenceProbe{}](const VideoFrame& frame) mutable {
+                if (probe_cadence && isGenerationActive(generation)) probe.observe(frame);
+                handleVideoFrame(frame, generation);
+            });
+#else
         video_decoder_->setCallback([this, generation](const VideoFrame& frame) {
             handleVideoFrame(frame, generation);
         });
+#endif
         lunar::diagnosticLog("media", "video decoder callback set generation=%u",
                              generation);
 
@@ -204,7 +329,11 @@ bool MediaPipeline::initialize(int width, int height, PerfStats* perf,
             options.video_presentation_mode);
         video_renderer_->setProgressSink(&renderer_stage_,
                                          &renderer_stage_started_ns_);
+#ifdef __SWITCH__
+        video_renderer_->setLsfg30fps(options.lsfg_30fps && !probe_cadence);
+#else
         video_renderer_->setLsfg30fps(options.lsfg_30fps);
+#endif
         video_renderer_->setPostProcessMode(options.post_process_mode);
         video_renderer_->setDitheringEnabled(options.dithering_enabled,
                                              options.dithering_strength);
