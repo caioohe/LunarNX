@@ -27,6 +27,7 @@ struct VideoFrame {
     int height = 0;
     int format = 0;       // AV_PIX_FMT_YUV420P or AV_PIX_FMT_NVTEGRA
     uint64_t timestamp = 0;
+    bool lsfg_cadence = false;
 };
 
 /// Shared FFmpeg/NVDEC plumbing. Owns no path-specific policy; Xbox and

@@ -439,6 +439,8 @@ bool PsStreamController::startStream() {
     media_opts.lsfg_30fps = lsfg_30fps_;
     media_opts.video_codec = video_codec_;
     media_opts.hold_non_target_startup_frames = true;
+    media_opts.video_presentation_mode = stream::VideoPresentationMode::RealtimeLatest;
+    media_opts.video_decode_catch_up_mode = stream::VideoDecodeCatchUpMode::Realtime;
     media_opts.video_backend = video_backend_;
 #if LUNARNX_PS_DIRECT_VIDEO
     media_opts.video_scheduling =
