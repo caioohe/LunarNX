@@ -37,6 +37,11 @@ jobs:
       - name: Check presentation shutdown lock ordering
         run: python3 tests/stream_presentation_lock_test.py
 
+      - name: Check PlayStation 540p and mobile bitrate settings
+        run: |
+          python3 tests/ps_settings_separation_test.py
+          python3 tests/ps_mobile_resolution_test.py
+
       - name: Prepare legacy libpeer source
         run: ./scripts/setup_dependencies.sh
 
