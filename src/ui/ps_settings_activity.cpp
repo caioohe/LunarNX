@@ -88,7 +88,15 @@ PsSettingsSnapshot loadPsSettings() {
     PsSettingsSnapshot out;
     cJSON* root = readConfig();
     const cJSON* resolution = cJSON_GetObjectItem(root, "ps_resolution");
-    if (cJSON_IsNumber(resolution) && resolution->valueint >= 1080) { out.width = 1920; out.height = 1080; }
+    if (cJSON_IsNumber(resolution)) {
+        if (resolution->valueint == 540) {
+            out.width = 960;
+            out.height = 540;
+        } else if (resolution->valueint >= 1080) {
+            out.width = 1920;
+            out.height = 1080;
+        }
+    }
     const cJSON* bitrate = cJSON_GetObjectItem(root, "ps_bitrate_kbps");
     if (cJSON_IsNumber(bitrate) && bitrate->valueint > 0) out.bitrate_kbps = bitrate->valueint;
     const cJSON* codec = cJSON_GetObjectItem(root, "ps_video_codec");
@@ -142,12 +150,32 @@ brls::View* PsSettingsActivity::createContentView() {
     root->addView(makeSectionHeader(brls::getStr("lunarnx/ps/settings_video_section"), brls::getStr("lunarnx/ps/settings_video_detail")));
     auto* card = makeUiCard(); card->setPadding(4, 8, 4, 8);
     auto* resolution = new brls::SelectorCell();
-    resolution->init(brls::getStr("lunarnx/settings/resolution"), {"720p", "1080p"}, settings_.height >= 1080 ? 1 : 0,
-        [this](int selected) { settings_.width = selected ? 1920 : 1280; settings_.height = selected ? 1080 : 720; });
+    resolution->init(brls::getStr("lunarnx/settings/resolution"), {"540p", "720p", "1080p"},
+        settings_.height >= 1080 ? 2 : settings_.height == 540 ? 0 : 1,
+        [this](int selected) {
+            if (selected == 0) {
+                settings_.width = 960;
+                settings_.height = 540;
+            } else if (selected == 2) {
+                settings_.width = 1920;
+                settings_.height = 1080;
+            } else {
+                settings_.width = 1280;
+                settings_.height = 720;
+            }
+        });
     card->addView(resolution);
     auto* bitrate = new brls::SelectorCell();
-    bitrate->init(brls::getStr("lunarnx/ps/settings_bitrate"), {"10 Mbps", "20 Mbps", "30 Mbps"}, settings_.bitrate_kbps >= 30000 ? 2 : settings_.bitrate_kbps >= 20000 ? 1 : 0,
-        [this](int selected) { settings_.bitrate_kbps = selected >= 2 ? 30000 : selected == 1 ? 20000 : 10000; });
+    bitrate->init(brls::getStr("lunarnx/ps/settings_bitrate"),
+        {"3 Mbps", "5 Mbps", "10 Mbps", "20 Mbps", "30 Mbps"},
+        settings_.bitrate_kbps >= 30000 ? 4
+            : settings_.bitrate_kbps >= 20000 ? 3
+            : settings_.bitrate_kbps >= 10000 ? 2
+            : settings_.bitrate_kbps >= 5000 ? 1 : 0,
+        [this](int selected) {
+            constexpr int kBitrateChoicesKbps[] = {3000, 5000, 10000, 20000, 30000};
+            settings_.bitrate_kbps = kBitrateChoicesKbps[std::clamp(selected, 0, 4)];
+        });
     card->addView(bitrate);
     auto* codec = new brls::SelectorCell();
     codec->init(brls::getStr("lunarnx/ps/settings_codec"),
